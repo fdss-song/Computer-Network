@@ -24,6 +24,7 @@ typedef struct {
 	uint32_t last_ack_received; /* 最近一次被确认的序列号，相当于发送方的窗口base */
 	pthread_mutex_t ack_lock; /* 单线程的话不需要 */
 	sent_pkt *sent_head; /* 带头结点，指的是如果链表为空，head->next=NULL */
+	sent_pkt *sent_end;
 	uint32_t sent_length; /* 发送但未被确认的数据字节数，nextseqnum = sent_length + last_ack_received */
 	recv_pkt *recv_head;
 	uint32_t recv_length; /* 缓存的数据长度 */
@@ -33,7 +34,7 @@ typedef struct {
     uint32_t rtt; /* RTT */
     uint32_t ssthresh; /* ssthresh */
 	bool timer_on; /* 计时器是否设置 */
-    enum control_status con_state;/* 用于拥塞控制算法表示状态 */
+    control_status con_state;/* 用于拥塞控制算法表示状态 */
 	 /* TimeoutInterval */
 }slide_window_t;
 
@@ -64,10 +65,10 @@ typedef struct {
 
 typedef enum {
 	CLOSED, /* 0 */
-  LISTEN, /* 1 */
-  SYN_SENT, /* 2 */
-  SYN_RECVD, /* 3 */
-  ESTABLISHED, /* 4 */
+	LISTEN, /* 1 */
+	SYN_SENT, /* 2 */
+	SYN_RECVD, /* 3 */
+	ESTABLISHED, /* 4 */
 	FIN_WAIT_1, /* 5 */
 	FIN_WAIT_2, /* 6 */
 	CLOSING, /* 7 */
