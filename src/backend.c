@@ -4,8 +4,10 @@
 #define min(a, b) ((a) > (b) ? (b) : (a))
 #define min3(A,B,C) ((A)>(B)?(B):(A))>C?C:((A)>(B)?(B):(A))
 
-
 void handle_ack(cmu_socket_t * sock, char * pkt){
+  uint32_t data_len;
+  socklen_t conn_len = sizeof(sock -> conn);
+  struct sent_pkt *pkts, *nexts;
   sock->window.rwnd = get_advertised_window(pkt);
   if(get_ack(pkt) > sock->window.last_ack_received){
     sock->ack_dup = 0;
@@ -16,7 +18,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
           sock->window.con_state = CONG_AVOI;
           break;
       case CONG_AVOI: /* 拥塞避免状态 */
-        sock->window.cwnd += MAX_DLEN * MAX_DLEN/sock->window.cwnd; /* TODO：公式写错，需要乘MSS */
+        sock->window.cwnd += MAX_DLEN * MAX_DLEN/sock->window.cwnd;
         break;
       case FAST_RECO: /* 快速恢复 */
         sock->window.cwnd = sock->window.ssthresh;
@@ -36,8 +38,8 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
       free(nexts);
     }
     // sock->window.sent_head->next = nexts;
-  } else if(get_ack(pkt) == sock->window.last_ack_received){
-      sock->ack_dup += 1; /* TODO：考虑收到的是之前的ACK，与目前记录的重复ACK并不是同一个，需要加上判断 */
+  } else if(get_ack(pkt) == sock->window.last_ack_received){ /* 只考虑对窗口前一个包的重复ACK */
+      sock->ack_dup += 1;
       if(sock->window.con_state == FAST_RECO){
         sock->window.cwnd += MAX_DLEN;/* 如果已经处于快速恢复状态，则加上一个mss */
       }
@@ -54,6 +56,73 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
         sock->ack_dup = 0;
       }
   }
+}
+
+void handle_datapkt(cmu_socket_t * sock, char * pkt){
+  char *rsp;
+  uint32_t data_len, seq, ack, rwnd;
+  socklen_t conn_len = sizeof(sock -> conn);
+  struct recv_pkt *pktr, *prevr, *nextr;
+  bool contins;
+  seq = get_seq(pkt);
+  /* 如果不是之前接收到的包，需要缓存下来； */
+  if(seq >= sock->window.last_seq_received /* 因为只有长度不为0的包才会占用序号并被缓存 */
+      || ((seq == sock->ISN+1) && (sock->window.last_seq_received == sock->ISN+1))/* 考虑三次握手刚建立好连接的时候 */
+    ){
+    /* 生成链表中要存储的pkt，确定pktr在链表中的顺序之后才能确定adjacent */
+    pktr = malloc(sizeof(recv_pkt));
+    pktr->seq = seq;
+    pktr->length = get_plen(pkt) - get_hlen(pkt);
+    pktr->data_start = malloc(pktr->length);
+    memcpy(pktr->data_start, pkt + DEFAULT_HEADER_LEN, pktr->length); 
+    /* 因为此函数返回之后，pkt会free，所以需要malloc新的空间来存储 */
+    pktr->adjacent = (seq == sock->window.last_seq_received);
+    pktr->next = NULL;
+    sock->window.recv_length += pktr->length;
+               
+    while(pthread_mutex_lock(sock->window.recv_lock) != 0);
+    prevr = sock->window.recv_head;
+    nextr = prevr->next;
+
+    if(nextr == NULL){
+      nextr = pktr;
+    } else {
+      contins = TRUE;
+      while(nextr != NULL){
+        if(nextr->seq > seq){ /* 找到插入的位置，通过更改指针插入 */
+          prevr->next = pktr;
+          pktr->next = nextr;
+          if(nextr->seq == seq + pktr->length){ /* 如果nextr与pkt相邻 */
+            nextr->adjacent = TRUE;
+          }
+        }
+          
+        if(!nextr->adjacent){ /* 如果adjacent为FALSE，说明可以读的列链表在此处断掉 */
+          contins = FALSE;
+        }
+
+        if(contins){ /* 如果从第一个包开始连续可读，那么更改last_seq_received */
+          sock->window.last_seq_received = prevr->seq + prevr->length;
+        }
+
+        prevr = prevr->next;
+        nextr = prevr->next;
+      }
+
+      if(seq > prevr->seq){
+        nextr = pktr;
+      }
+    }
+    pthread_mutex_unlock(sock->window.recv_lock);
+  }
+  seq = sock->window.last_ack_received + sock->window.sent_length;
+  ack = last_seq_received; /* 累积确认 */
+  rwnd = MAX_NETWORK_BUFFER - sock->window.recv_length;
+  rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
+          DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, rwnd, 0, NULL, NULL, 0);
+  sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+          &(sock->conn), conn_len);
+  free(rsp);
 }
 
 /*
@@ -76,7 +145,7 @@ void handle_message(cmu_socket_t * sock, char * pkt){
     bool contins;
     switch(flags){
         case ACK_FLAG_MASK:
-            void handle_ack(sock,pkt);
+            handle_ack(sock, pkt);
             break;
         case ACK_FLAG_MASK | SYN_FLAG_MASK:
             break;
@@ -85,66 +154,8 @@ void handle_message(cmu_socket_t * sock, char * pkt){
         case FIN_FLAG_MASK:
             break;
         default:
-            seq = get_seq(pkt);
-            /* 如果不是之前接收到的包，需要缓存下来； */
-            if(seq >= sock->window.last_seq_received /* 因为只有长度不为0的包才会占用序号并被缓存 */
-               || ((seq == sock->ISN+1) && (sock->window.last_seq_received == sock->ISN+1))
-                /* 考虑三次握手刚建立好连接的时候 */
-                    )
-            {
-                /* 生成链表中要存储的pkt，确定pktr在链表中的顺序之后才能确定adjacent */
-                pktr = malloc(sizeof(recv_pkt));
-                pktr->seq = seq;
-                pktr->length = get_plen(pkt) - DEFAULT_HEADER_LEN;
-                pktr->data_start = malloc(pktr->length);
-                memcpy(pktr->data_start, pkt + DEFAULT_HEADER_LEN, pktr->length); /* 因为此函数返回之后，pkt会free，所以需要malloc新的空间来存储 */
-                pktr->adjacent = (seq == sock->window.last_seq_received);
-                pktr->next = NULL;
-                sock->window.recv_length += pktr->length;
-
-                while(pthread_mutex_lock(sock->window.recv_lock) != 0);
-                prevr = sock->window.recv_head;
-                nextr = prevr->next;
-
-                if(nextr == NULL){
-                    nextr = pktr;
-                } else {
-                    contins = TRUE;
-                    while(nextr != NULL){
-                        if(nextr->seq > seq){
-                            prevr->next = pktr;
-                            pktr->next = nextr;
-                        }
-                        if(nextr->seq == seq + pktr->length){
-                            nextr->adjacent = TRUE;
-                        }
-                        if(!nextr->adjacent){
-                            contins = FALSE;
-                        }
-                        if(contins){
-                            sock->window.last_seq_received = prevr->seq + prevr->length;
-                        }
-
-                        if(nextr->adjacent)
-                            prevr = prevr->next;
-                        nextr = prevr->next;
-                    }
-
-                    if(seq > prevr->seq){
-                        nextr = pktr;
-                    }
-                }
-                pthread_mutex_unlock(sock->window.recv_lock);
-            }
-            seq = sock->window.last_ack_received + sock->window.sent_length;
-            ack = last_seq_received; /* 累积确认 */
-            rwnd = MAX_NETWORK_BUFFER - sock->window.recv_length;
-            rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
-                                    DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, rwnd, 0, NULL, NULL, 0);
-            sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-                    &(sock->conn), conn_len);
-            free(rsp);
-            break
+            handle_datapkt(sock, pkt);
+            break;
     }
 }
 
