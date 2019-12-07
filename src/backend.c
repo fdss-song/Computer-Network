@@ -1,8 +1,9 @@
 #include "backend.h"
 #include <math.h>
 
-#define min(a, b) ((a) > (b) ? (b) : (a))
-#define min3(A,B,C) ((A)>(B)?(B):(A))>C?C:((A)>(B)?(B):(A))
+#define min(A, B) ((A) > (B) ? (B) : (A))
+
+#define min3(A,B,C) (((A)> (B) ? (B) : (A)) > C) ? C : ((A) > (B) ? (B) : (A))
 
 void handle_ack(cmu_socket_t * sock, char * pkt){
   uint32_t data_len;
@@ -97,7 +98,7 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt){
           }
         }
           
-        if(!nextr->adjacent){ /* 如果adjacent为FALSE，说明可以读的列链表在此处断掉 */
+        if(!nextr->adjacent){ /* 如果adjacent为FALSE，说明可以读的链表在此处断掉 */
           contins = FALSE;
         }
 
@@ -159,62 +160,6 @@ void handle_message(cmu_socket_t * sock, char * pkt){
     }
 }
 
-/*
- * Param: sock - The socket to use for sending data
- * Param: data - The data to be sent
- * Param: buf_len - the length of the data being sent
- *
- * Purpose: Breaks up the data into packets and sends a single
- *  packet at a time.
- *
- * Comment: This will need to be updated for checkpoints 1,2,3
- *
- */
-void single_send(cmu_socket_t * sock, char* data, int buf_len){
-    char* msg;
-    char* data_offset = data;
-    int sockfd, plen;
-    struct sent_pkt *pkts, *nexts;
-    size_t conn_len = sizeof(sock->conn);
-    uint32_t seq;
-    uint32_t rwnd;
-    uint32_t cwnd;
-    uint32_t window_size;
-    sockfd = sock->socket;
-    if(buf_len > 0){
-        while(buf_len != 0){
-            window_size = min(sock->window.cwnd, sock->window.rwnd);
-            seq = sock->window.last_ack_received + sock->window.sent_length;
-            uint32_t sent_len = min3(window_size_sock->window.sent_length, MAX_DLEN, buf_len);/* 按上次讨论的结果，window_size要减去sent_length */
-            if(sent_len == 0)
-                sent_len = 1;
-            plen = DEFAULT_HEADER_LEN + sent_len;
-            msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq,
-                                    DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, sent_len);
-            buf_len -= sent_len;
-            sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
-
-            struct *pkt_store;
-            sock->window.sent_length += sent_len;//储存在链表中的数据需要计算在sending_len中
-            *pkt_store = malloc(sizeof(sent_pkt));//用于储存sent_pkt的结构
-            struct timeval sent_time;
-            gettimeofday(&sent_time,NULL);/* 获取当前时间 */
-            pkt_store->pkt_start = msg;/* msg和sent_time要记得在收到ack以后把它free掉 */
-            pkt_store->sent_time = sent_time;
-
-            pkts = sock->window.sent_head;
-            while((nexts = pkts->next) != NULL){/* 此处为了找到发送缓存队列最后一个包的位置,pkts是最后一个包 */
-                pkts = nexts;
-            }
-            pkts->next = pkt_store;/* 这里可能写的不对，看看逻辑和代码正不正确,我觉得应该没问题 */
-
-            data_offset += sent_len;
-            check_for_data(sock, NO_WAIT);//发送完后马上检查ack,根据ack更新window
-        }
-    }
-}
-
-
 
 /*
  * Param: sock - The socket to check for acknowledgements.
@@ -254,14 +199,14 @@ void check_for_data(cmu_socket_t * sock, int flags){
     time_out.tv_usec = 0;
 
     while(pthread_mutex_lock(&(sock->recv_lock)) != 0);
-    while (len != 0){//直到缓冲区里没有内容了，跳出循环
+    while (len != 0){/* 直到缓冲区里没有内容了，跳出循环 */
         switch(flags){
             /* TODO:处理TIMEOUT */
-            case NO_FLAG:
+            case NO_FLAG: /* wait */
                 len = recvfrom(sock->socket, hdr, DEFAULT_HEADER_LEN, MSG_PEEK,
                                (struct sockaddr *) &(sock->conn), &conn_len);
                 break;
-            case TIMEOUT:/* 挥手，握手阶段的time_out就用这个来实现就好 */
+            case TIMEOUT:/* 设定超时间隔 */
                 FD_ZERO(&ackFD);
                 FD_SET(sock->socket, &ackFD);
                 if(select(sock->socket+1, &ackFD, NULL, NULL, &time_out) <= 0){
@@ -289,6 +234,61 @@ void check_for_data(cmu_socket_t * sock, int flags){
 }
 
 /*
+ * Param: sock - The socket to use for sending data
+ * Param: data - The data to be sent
+ * Param: buf_len - the length of the data being sent
+ *
+ * Purpose: Breaks up the data into packets and sends a single
+ *  packet at a time.
+ *
+ * Comment: This will need to be updated for checkpoints 1,2,3
+ *
+ */
+void single_send(cmu_socket_t * sock, char* data, int length){
+  if(length <= 0){ /* 只发一个数据包，有效字节，并且发送窗口 */
+    length = 1;/* 如果接收方的窗口满了，应该发一个数据；此处赋值为1，统一处理 */
+
+  char* msg;
+  int sockfd, plen;
+  struct sent_pkt *pkts, *nexts;
+  size_t conn_len = sizeof(sock->conn);
+  uint32_t seq;
+  sockfd = sock->socket;
+
+  // window_size = min(sock->window.cwnd, sock->window.rwnd);
+  seq = sock->window.last_ack_received + sock->window.sent_length;
+  // uint32_t sent_len = min3(window_size - sock->window.sent_length, MAX_DLEN, buf_len);
+  /* 按上次讨论的结果，window_size要减去sent_length */
+  // if(sent_len == 0)
+  // sent_len = 1;
+  plen = DEFAULT_HEADER_LEN + length;
+  msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq, /* TODO：如果考虑发送的ACK带数据，此处需要改 */ 
+          DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, sent_len);
+  // buf_len -= sent_len;
+  sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
+
+  struct *pkt_store;
+  sock->window.sent_length += length; /* 储存在链表中的数据需要计算在sending_len中 */ 
+  pkt_store = malloc(sizeof(sent_pkt)); /* 用于储存sent_pkt的结构 */
+  
+  struct timeval sent_time;
+  gettimeofday(&sent_time,NULL); /* 获取当前时间 */
+  pkt_store->pkt_start = msg; /* msg和sent_time要记得在收到ack以后把它free掉 */
+  pkt_store->sent_time = sent_time;
+  pkt_store->next = NULL;
+
+  pkts = sock->window.sent_head;
+  while((nexts = pkts->next) != NULL){ /* 此处为了找到发送缓存队列最后一个包的位置,pkts是最后一个包 */
+    pkts = nexts;
+  }
+  pkts->next = pkt_store; 
+
+  data_offset += length;
+  // check_for_data(sock, NO_WAIT);//发送完后马上检查ack,根据ack更新window
+
+}
+
+/*
  * Param: in - the socket that is used for backend processing
  *
  * Purpose: To poll in the background for sending and receiving data to
@@ -296,53 +296,56 @@ void check_for_data(cmu_socket_t * sock, int flags){
  *
  */
 void* begin_backend(void * in){
-    cmu_socket_t * dst = (cmu_socket_t *) in;
-    int death, buf_len, send_signal;
-    char* data;
+  cmu_socket_t * dst = (cmu_socket_t *) in;
+  int death, send_signal, window_size;
+  char *data, *temp;
+  uint32_t buf_len, length;
 
-    while(TRUE){
-        while(pthread_mutex_lock(&(dst->death_lock)) !=  0);
-        death = dst->dying;
-        pthread_mutex_unlock(&(dst->death_lock));
+  while(TRUE){
+    while(pthread_mutex_lock(&(dst->death_lock)) !=  0);
+    death = dst->dying;
+    pthread_mutex_unlock(&(dst->death_lock));
 
+    while(pthread_mutex_lock(&(dst->send_lock)) != 0);
+    buf_len = dst->sending_len;
 
-        while(pthread_mutex_lock(&(dst->send_lock)) != 0);
-        buf_len = dst->sending_len;
+    if(death && buf_len == 0)
+      break;
 
-        if(death && buf_len == 0)
-            break;
+    window_size = min(sock->window.cwnd, sock->window.rwnd);
+    length = min3(buf_len, MAX_DLEN, window_size - sock->window.sent_length);
 
-        if(buf_len > 0){
-            data = malloc(buf_len);
-            memcpy(data, dst->sending_buf, buf_len);
-            dst->sending_len = 0
-            free(dst->sending_buf);
-            dst->sending_buf = NULL;
-            pthread_mutex_unlock(&(dst->send_lock));
-            single_send(dst, data, buf_len);
-            free(data);
-        }
-        else
-            pthread_mutex_unlock(&(dst->send_lock));
-        check_for_data(dst, NO_WAIT);
+    length = length > 0 ? length : 0;
 
-        while(pthread_mutex_lock(&(dst->recv_lock)) != 0);
+    data = malloc(length);
+    memcpy(data, dst->sending_buf, length);
+    dst->sending_len -= length;
+    temp = malloc(dst->sending_len);
+    memcpy(temp, dst->sending_buf+length, dst->sending_len);
+    free(dst->sending_buf);
+    dst->sending_buf = temp;
+    
+    pthread_mutex_unlock(&(dst->send_lock));
+    single_send(dst, data, length);
+    free(data);
+    
+    check_for_data(dst, NO_WAIT);
 
-        if(dst->window.recv_length > 0)
-            send_signal = TRUE;
-        else
-            send_signal = FALSE;
-        pthread_mutex_unlock(&(dst->recv_lock));
+    while(pthread_mutex_lock(&(dst->recv_lock)) != 0);
+    if(dst->window.recv_length > 0)
+      send_signal = TRUE;
+    else
+      send_signal = FALSE;
+    pthread_mutex_unlock(&(dst->recv_lock));
 
-        if(send_signal){
-            pthread_cond_signal(&(dst->wait_cond));
-        }
+    if(send_signal){
+      pthread_cond_signal(&(dst->wait_cond));
     }
+  }
 
-    pthread_exit(NULL);
-    return NULL;
+  pthread_exit(NULL);
+  return NULL;
 }
-
 
 void print_state(cmu_socket_t *dst){
     switch(dst->state){
