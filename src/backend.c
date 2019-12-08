@@ -46,8 +46,8 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                         sock->window.rtt = 0.125 * ((arrival_time.tv_sec - nexts->sent_time.tv_sec) * 1000 + (arrival_time.tv_usec - nexts->sent_time.tv_usec) / 1000)
                                            + 0.875 * sock->window.rtt;
                         sock->window.DevRTT = 0.75 * sock->window.DevRTT + 0.25 * abs((sock->window.rtt - (arrival_time.tv_sec - nexts->sent_time.tv_sec) * 1000 + (arrival_time.tv_usec - nexts->sent_time.tv_usec) / 1000));
-                        sock->window.TimeoutInterval = window.rtt + 4 * sock->window.DevRTT;
                     }
+                    sock->window.TimeoutInterval = window.rtt + 4 * sock->window.DevRTT;
                     free(arrival_time);
                 }
             }
@@ -310,25 +310,23 @@ void check_timeout(cmu_socket_t * sock){
     struct timeval now_time;
     gettimeofday(&now_time,NULL); /* 获取当前时间 */
 
-    while((nexts = pkts->next) != NULL){
-        time = (now_time.tv_sec - nexts->send_time.tv_sec) * 1000 + (now_time.tv_usec - nexts->send_time.tv_usec) / 1000;
-        if(time >= sock->window.TimeoutInterval){//超时
-            sock->window.TimeoutInterval = 2 * sock->window.TimeoutInterval;
-            nexts->is_resend = TRUE;
-            gettimeofday(nexts->send_time,NULL);
+    nexts = pkts->next;
 
-            //更新状态
-            sock->window.ssthresh = sock->window.cwnd / 2;
-            sock->window.cwnd = MAX_DLEN;
-            sock->ack_dup = 0;
-            sock->window.con_state = SLOW_STAR;
+    time = (now_time.tv_sec - nexts->send_time.tv_sec) * 1000 + (now_time.tv_usec - nexts->send_time.tv_usec) / 1000;
+    if(time >= sock->window.TimeoutInterval){//超时
+        sock->window.TimeoutInterval = 2 * sock->window.TimeoutInterval;
+        nexts->is_resend = TRUE;
+        gettimeofday(nexts->send_time,NULL);
 
-            sendto(sockfd, nexts.pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
-        } else{
-            break;
-        }
-        pkts = nexts;
+        //更新状态
+        sock->window.ssthresh = sock->window.cwnd / 2;
+        sock->window.cwnd = MAX_DLEN;
+        sock->ack_dup = 0;
+        sock->window.con_state = SLOW_STAR;
+
+        sendto(sockfd, nexts.pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
     }
+
     free(now_time);
 }
 
@@ -347,7 +345,12 @@ void* begin_backend(void * in){
 
     dst->window.TimeoutInterval = 1000;
 
+    uint32_t time;
+    struct timeval now_time;
+
+
     while(TRUE){
+        gettimeofday(&now_time,NULL); /* 获取当前时间 */
         while(pthread_mutex_lock(&(dst->death_lock)) !=  0);
         death = dst->dying;
         pthread_mutex_unlock(&(dst->death_lock));
