@@ -245,9 +245,6 @@ void check_for_data(cmu_socket_t * sock, int flags){
  *
  */
 void single_send(cmu_socket_t * sock, char* data, int length){
-  if(length <= 0){ /* 只发一个数据包，有效字节，并且发送窗口 */
-    length = 1;/* 如果接收方的窗口满了，应该发一个数据；此处赋值为1，统一处理 */
-
   char* msg;
   int sockfd, plen;
   struct sent_pkt *pkts, *nexts;
@@ -255,20 +252,14 @@ void single_send(cmu_socket_t * sock, char* data, int length){
   uint32_t seq;
   sockfd = sock->socket;
 
-  // window_size = min(sock->window.cwnd, sock->window.rwnd);
   seq = sock->window.last_ack_received + sock->window.sent_length;
-  // uint32_t sent_len = min3(window_size - sock->window.sent_length, MAX_DLEN, buf_len);
-  /* 按上次讨论的结果，window_size要减去sent_length */
-  // if(sent_len == 0)
-  // sent_len = 1;
   plen = DEFAULT_HEADER_LEN + length;
   msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq, /* TODO：如果考虑发送的ACK带数据，此处需要改 */ 
-          DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data_offset, sent_len);
-  // buf_len -= sent_len;
+          DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data, length);
   sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
 
+  sock->window.sent_length += length; /* 储存在链表中的数据需要计算在sending_len中 */
   struct *pkt_store;
-  sock->window.sent_length += length; /* 储存在链表中的数据需要计算在sending_len中 */ 
   pkt_store = malloc(sizeof(sent_pkt)); /* 用于储存sent_pkt的结构 */
   
   struct timeval sent_time;
@@ -281,11 +272,7 @@ void single_send(cmu_socket_t * sock, char* data, int length){
   while((nexts = pkts->next) != NULL){ /* 此处为了找到发送缓存队列最后一个包的位置,pkts是最后一个包 */
     pkts = nexts;
   }
-  pkts->next = pkt_store; 
-
-  data_offset += length;
-  // check_for_data(sock, NO_WAIT);//发送完后马上检查ack,根据ack更新window
-
+  pkts->next = pkt_store;
 }
 
 /*
@@ -312,25 +299,28 @@ void* begin_backend(void * in){
     if(death && buf_len == 0)
       break;
 
-    window_size = min(sock->window.cwnd, sock->window.rwnd);
-    length = min3(buf_len, MAX_DLEN, window_size - sock->window.sent_length);
+    if(buf_len > 0){/* 有数据要发时才会，如果没数据就直接跳过，所以在外面套了一层判断 */
+        window_size = min(sock->window.cwnd, sock->window.rwnd);
+        length = min3(buf_len, MAX_DLEN, window_size - sock->window.sent_length);
 
-    length = length > 0 ? length : 0;
+        length = length > 0 ? length : 1;/* 如果length小于0，在这里把它重新赋值为1 */
 
-    data = malloc(length);
-    memcpy(data, dst->sending_buf, length);
-    dst->sending_len -= length;
-    temp = malloc(dst->sending_len);
-    memcpy(temp, dst->sending_buf+length, dst->sending_len);
-    free(dst->sending_buf);
-    dst->sending_buf = temp;
-    
-    pthread_mutex_unlock(&(dst->send_lock));
-    single_send(dst, data, length);
-    free(data);
-    
+        data = malloc(length);
+        memcpy(data, dst->sending_buf, length);
+        dst->sending_len -= length;
+        temp = malloc(dst->sending_len);
+        memcpy(temp, dst->sending_buf+length, dst->sending_len);
+        free(dst->sending_buf);
+        dst->sending_buf = temp;
+
+        pthread_mutex_unlock(&(dst->send_lock));
+        single_send(dst, data, length);
+        free(data);
+    }
+
     check_for_data(dst, NO_WAIT);
 
+    /* 判断接收缓冲区有没有内容，如果有就读 */
     while(pthread_mutex_lock(&(dst->recv_lock)) != 0);
     if(dst->window.recv_length > 0)
       send_signal = TRUE;
