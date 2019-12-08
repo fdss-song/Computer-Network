@@ -32,35 +32,35 @@ char* set_headers(uint16_t src, uint16_t dst, uint32_t seq, uint32_t ack,
     msg = (char*) calloc(plen, sizeof(char));
     
     temp32 = htonl(IDENTIFIER);
-    memcpy(msg, &temp32, SIZE32);
+    memcpy(msg, &temp32, SIZE32);//4
     index += SIZE32;
     temp16 = htons(src);
-    memcpy(msg+index, &temp16, SIZE16);
+    memcpy(msg+index, &temp16, SIZE16);//2
     index += SIZE16;
     temp16 = htons(dst);
-    memcpy(msg+index, &temp16, SIZE16);
+    memcpy(msg+index, &temp16, SIZE16);//2
     index += SIZE16;
     temp32 = htonl(seq);
-    memcpy(msg+index, &temp32, SIZE32);
+    memcpy(msg+index, &temp32, SIZE32);//4
     index += SIZE32;
     temp32 = htonl(ack);
-    memcpy(msg+index, &temp32, SIZE32);
+    memcpy(msg+index, &temp32, SIZE32);//4
     index += SIZE32;
     temp16 = htons(hlen);
-    memcpy(msg+index, &temp16, SIZE16);
+    memcpy(msg+index, &temp16, SIZE16);//2
     index += SIZE16;
     temp16 = htons(plen);
-    memcpy(msg+index, &temp16, SIZE16);
+    memcpy(msg+index, &temp16, SIZE16);//2
     index += SIZE16;
-    memcpy(msg+index, &flags, SIZE8);
+    memcpy(msg+index, &flags, SIZE8);//1
     index += SIZE8;
     temp16 = htons(adv_window);
-    memcpy(msg+index, &temp16, SIZE16);
+    memcpy(msg+index, &temp16, SIZE16);//2
     index += SIZE16;
 
 
     temp16 = htons(ext);
-    memcpy(msg+index, &temp16, SIZE16);
+    memcpy(msg+index, &temp16, SIZE16);//2
     index += SIZE16;
 
 
@@ -92,7 +92,6 @@ char* packet_to_buf(cmu_packet_t* p){
     
     if(p->header.plen > p->header.hlen)
         memcpy(msg+(p->header.hlen), p->data, (p->header.plen - (p->header.hlen)));
-
 
     return msg;
 }
