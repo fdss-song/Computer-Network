@@ -316,8 +316,10 @@ void* begin_backend(void * in){
         pthread_mutex_unlock(&(dst->send_lock));
         single_send(dst, data, length);
         free(data);
+    } else { /* 重要：加锁和解锁对应 */
+        pthread_mutex_unlock(&(dst->send_lock));
     }
-
+    
     check_for_data(dst, NO_WAIT);
 
     /* 判断接收缓冲区有没有内容，如果有就读 */
