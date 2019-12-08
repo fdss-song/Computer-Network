@@ -32,11 +32,11 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
         sock->window.last_ack_received = get_ack(pkt);
         sock->window.rwnd = get_advertised_window(pkt);
         pkts = sock->window.sent_head;
-        while((nexts = pkts->next) != NULL && get_seq(nexts->pkt_start) <= get_ack(pkt)){//==也应该去掉本地缓存
+        while((nexts = pkts->next) != NULL && get_seq(nexts->pkt_start) < get_ack(pkt)){
             pkts->next = nexts->next;
 
             //确定该ack时，才更新rtt, devRtt, timeoutInterval
-            if(get_seq(nexts->pkt_start) == get_ack(pkt)){
+            if(get_seq(nexts->pkt_start) + get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start) == get_ack(pkt)){
                 if(!nexts.is_resend){
                     struct timeval arrival_time;
                     gettimeofday(&arrival_time,NULL);
@@ -48,6 +48,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                         sock->window.DevRTT = 0.75 * sock->window.DevRTT + 0.25 * abs((sock->window.rtt - (arrival_time.tv_sec - nexts->sent_time.tv_sec) * 1000 + (arrival_time.tv_usec - nexts->sent_time.tv_usec) / 1000));
                         sock->window.TimeoutInterval = window.rtt + 4 * sock->window.DevRTT;
                     }
+                    free(arrival_time);
                 }
             }
 
@@ -55,7 +56,6 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             free(nexts->pkt_start);
             free(nexts);
         }
-        gettimeofday(sock->begin_time,NULL); /* 更新socket计时器 */
         // sock->window.sent_head->next = nexts;
     } else if(get_ack(pkt) == sock->window.last_ack_received){ /* 只考虑对窗口前一个包的重复ACK */
         sock->ack_dup += 1;
@@ -76,7 +76,6 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             pkt_store.is_resend = TRUE;
             sendto(sockfd, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);/* 快速重传一定是传缓存链表的第一个包，此处主要看看语法对不对 */
             sock->ack_dup = 0;
-            gettimeofday(sock->begin_time,NULL); /* 更新socket计时器 */
         }
     }
 }
@@ -314,16 +313,17 @@ void check_timeout(cmu_socket_t * sock){
     while((nexts = pkts->next) != NULL){
         time = (now_time.tv_sec - nexts->send_time.tv_sec) * 1000 + (now_time.tv_usec - nexts->send_time.tv_usec) / 1000;
         if(time >= sock->window.TimeoutInterval){//超时
-            sendto(sockfd, nexts.pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
             sock->window.TimeoutInterval = 2 * sock->window.TimeoutInterval;
-            pkt_store->is_resend = TRUE;
-            gettimeofday(sock->begin_time,NULL); /* 更新socket计时器 */
+            nexts->is_resend = TRUE;
+            gettimeofday(nexts->send_time,NULL);
 
             //更新状态
             sock->window.ssthresh = sock->window.cwnd / 2;
             sock->window.cwnd = MAX_DLEN;
             sock->ack_dup = 0;
             sock->window.con_state = SLOW_STAR;
+
+            sendto(sockfd, nexts.pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
         } else{
             break;
         }
