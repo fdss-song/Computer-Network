@@ -13,6 +13,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
     socklen_t conn_len = sizeof(sock -> conn);
     sent_pkt *pkts, *nexts;
     sock->window.rwnd = get_advertised_window(pkt);
+    printf("recv ack : %d\n", get_ack(pkt));
     if(get_ack(pkt) > sock->window.last_ack_received){
         sock->ack_dup = 0;
         switch(sock->window.con_state){
@@ -81,7 +82,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
 #endif
 }
 
-void handle_datapkt(cmu_socket_t * sock, char * pkt){
+void handle_datapkt(cmu_socket_t * sock, char * pkt) {
 #ifdef DEBUG
     printf("%s", "handle_datapkt start");
     printf("\n");
@@ -89,92 +90,70 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt){
 
     char *rsp;
     uint32_t seq, ack, rwnd;
-    socklen_t conn_len = sizeof(sock -> conn);
+    socklen_t conn_len = sizeof(sock->conn);
     recv_pkt *pktr, *prevr, *nextr;
-    bool contins;
+    bool flag = TRUE;/* 用于判断该数据包是否已经被插入 */
     seq = get_seq(pkt);
     /* 如果不是之前接收到的包，需要缓存下来； */
-    if(seq >= sock->window.last_seq_received /* 因为只有长度不为0的包才会占用序号并被缓存 */
-       || ((seq == sock->ISN+1) && (sock->window.last_seq_received == sock->ISN+1))/* 考虑三次握手刚建立好连接的时候 */
-            ){
-        /* 生成链表中要存储的pkt，确定pktr在链表中的顺序之后才能确定adjacent */
+    if (seq >= sock->window.last_seq_received/*因为只有长度不为0的包才会占用序号并被缓存*/
+        || ((seq == sock->ISN + 1) && (sock->window.last_seq_received == sock->ISN + 1))/*考虑三次握手刚建立好连接的时候*/
+            ) {
+        printf("recv seq:%d\n",seq);
+        /*生成链表中要存储的pkt，确定pktr在链表中的顺序之后才能确定adjacent*/
         pktr = malloc(sizeof(recv_pkt));
         pktr->seq = seq;
         pktr->data_length = get_plen(pkt) - get_hlen(pkt);
+//        printf("save pkt len:%d\n",pktr->data_length);
+        printf("save pkt seq:%d\n",seq);
         pktr->data_start = malloc(pktr->data_length);
         memcpy(pktr->data_start, pkt + get_hlen(pkt), pktr->data_length);
-        /* 因为此函数返回之后，pkt会free，所以需要malloc新的空间来存储 */
+        /*因为此函数返回之后，pkt会free，所以需要malloc新的空间来存储*/
         pktr->adjacent = (seq == sock->window.last_seq_received);
         pktr->next = NULL;
-#ifdef DEBUG
-    printf("handle_datapkt: 收到的数据： %s\n", pktr->data_start);
-    printf("%s", "handle_datapkt: 正在缓存数据包……");
-    printf("\n");
-#endif
-  
+
         sock->window.recv_length += pktr->data_length;
 
         prevr = sock->window.recv_head;
         nextr = prevr->next;
 
-        if(nextr == NULL){
-#ifdef DEBUG
-    printf("%s", "handle_datapkt: 链表为空，插入中……");
-    printf("\n");
-#endif
+        if (nextr == NULL) {
             prevr->next = pktr;
+            sock->window.last_seq_received = seq + pktr->data_length;
         } else {
-            contins = TRUE;
-            while(nextr != NULL){
-                if(nextr->seq > seq){ /* 找到插入的位置，通过更改指针插入 */
+            while (nextr != NULL) {/*找到插入的位置，通过更改指针插入*/
+                if (nextr->seq > seq) {
+                    flag = FALSE;/* 告诉下一个判断，它已经被插入过了 */
                     prevr->next = pktr;
                     pktr->next = nextr;
-                    if(nextr->seq == seq + pktr->data_length){ /* 如果nextr与pkt相邻 */
+                    if (nextr->seq == seq + pktr->data_length) {/*如果nextr与pkt相邻*/
                         nextr->adjacent = TRUE;
                     }
+                    break;
+                } else {
+                    prevr = nextr;
+                    nextr = nextr->next;
                 }
-
-                if(!nextr->adjacent){ /* 如果adjacent为FALSE，说明可以读的链表在此处断掉 */
-                    contins = FALSE;
-                }
-
-                if(contins){ /* 如果从第一个包开始连续可读，那么更改last_seq_received */
-                    sock->window.last_seq_received = prevr->seq + prevr->data_length;
-                }
-
-                prevr = prevr->next;
-                nextr = prevr->next;
             }
-
-            if(seq > prevr->seq){
-                nextr = pktr;
+            if(flag){/* 判断之前有没有插入过，如果没插入过，那么这个包一定是放最后的 */
+                prevr->next = pktr;
             }
+            prevr = sock->window.recv_head;
+            while ((nextr = prevr->next) != NULL && nextr->adjacent) {/*此处为了找到第一个adjacent为false或者整个列表最后一个struct*/
+                prevr = nextr;
+            }
+            sock->window.last_seq_received = prevr->seq + prevr->data_length;
         }
     }
+        seq = sock->window.last_ack_received + sock->window.sent_length;
+        ack = sock->window.last_seq_received; /* 累积确认 */
+        rwnd = MAX_NETWORK_BUFFER - sock->window.recv_length;
+        rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
+                                DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, rwnd, 0, NULL, NULL, 0);
+        sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr *)
+                &(sock->conn), conn_len);
+        printf("sent ack %d\n", ack);
+        free(rsp);
 
-#ifdef DEBUG
-    printf("\n此时链表中的数据\n");
-    recv_pkt *pktd, *prevd;
-    prevd = sock->window.recv_head;
-    while((pktd = prevd->next) != NULL){
-        printf("%s\n", pktd->data_start);
-    }
-    printf("\n链表中数据结束\n");
-#endif
-
-    seq = sock->window.last_ack_received + sock->window.sent_length;
-    ack = sock->window.last_seq_received; /* 累积确认 */
-    rwnd = MAX_NETWORK_BUFFER - sock->window.recv_length;
-    rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
-                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, rwnd, 0, NULL, NULL, 0);
-    sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-            &(sock->conn), conn_len);
-    free(rsp);
-
-#ifdef DEBUG
-    printf("%s", "handle_datapkt return");
-    printf("\n");
-#endif
 }
 
 /*
@@ -331,7 +310,7 @@ void single_send(cmu_socket_t * sock, char* data, int length){
     uint32_t seq;
     sockfd = sock->socket;
 
-    seq = sock->window.last_ack_received /* + sock->window.sent_length */;
+    seq = sock->window.last_ack_received + sock->window.sent_length ;
     plen = DEFAULT_HEADER_LEN + length;
     msg = create_packet_buf(sock->my_port, sock->their_port, seq, seq, /* TODO：如果考虑发送的ACK带数据，此处需要改 */
                             DEFAULT_HEADER_LEN, plen, NO_FLAG, 1, 0, NULL, data, length);
@@ -340,7 +319,7 @@ void single_send(cmu_socket_t * sock, char* data, int length){
     sent_pkt *pkt_store;
     sock->window.sent_length += length; /* 储存在链表中的数据需要计算在sending_len中 */
     pkt_store = malloc(sizeof(sent_pkt)); /* 用于储存sent_pkt的结构 */
-
+    printf("sent seq : %d\n", seq);
     struct timeval sent_time;
     gettimeofday(&sent_time,NULL); /* 获取当前时间 */
     pkt_store->pkt_start = msg; /* msg和sent_time要记得在收到ack以后把它free掉 */
@@ -480,4 +459,3 @@ void* begin_backend(void * in){
     pthread_exit(NULL);
     return NULL;
 }
-

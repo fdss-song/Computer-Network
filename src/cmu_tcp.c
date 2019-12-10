@@ -237,6 +237,7 @@ int cmu_write(cmu_socket_t * sock, char* src, int length){
         sock->sending_buf = realloc(sock->sending_buf, length + sock->sending_len);
     memcpy(sock->sending_buf + sock->sending_len, src, length);
     sock->sending_len += length;
+    printf("sending len : %d\n",sock->sending_len);
 
     pthread_mutex_unlock(&(sock->send_lock));
 
