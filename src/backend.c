@@ -107,15 +107,11 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt){
         pktr->adjacent = (seq == sock->window.last_seq_received);
         pktr->next = NULL;
 #ifdef DEBUG
+    printf("handle_datapkt: 收到的数据： %s\n", pktr->data_start);
     printf("%s", "handle_datapkt: 正在缓存数据包……");
     printf("\n");
 #endif
-        // while(pthread_mutex_lock(&(sock->window.recv_lock)) != 0);
-
-#ifdef DEBUG
-    printf("%s", "handle_datapkt: 拿到recv_lock……");
-    printf("\n");
-#endif        
+  
         sock->window.recv_length += pktr->data_length;
 
         prevr = sock->window.recv_head;
@@ -126,7 +122,7 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt){
     printf("%s", "handle_datapkt: 链表为空，插入中……");
     printf("\n");
 #endif
-            nextr = pktr;
+            prevr->next = pktr;
         } else {
             contins = TRUE;
             while(nextr != NULL){
@@ -155,10 +151,20 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt){
             }
         }
     }
+
+#ifdef DEBUG
+    printf("\n此时链表中的数据\n");
+    recv_pkt *pktd, *prevd;
+    prevd = sock->window.recv_head;
+    while((pktd = prevd->next) != NULL){
+        printf("%s\n", pktd->data_start);
+    }
+    printf("\n链表中数据结束\n");
+#endif
+
     seq = sock->window.last_ack_received + sock->window.sent_length;
     ack = sock->window.last_seq_received; /* 累积确认 */
     rwnd = MAX_NETWORK_BUFFER - sock->window.recv_length;
-    // pthread_mutex_unlock(&(sock->window.recv_lock)); /* 保证在最小范围上加锁，但是此处的unlock可能是多余的，不过不影响正确性 */
     rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
                             DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, rwnd, 0, NULL, NULL, 0);
     sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
@@ -274,6 +280,12 @@ void check_for_data(cmu_socket_t * sock, int flags){
                 return;
         }
         if(len >= DEFAULT_HEADER_LEN){//收到一个以上的包，但不知道是ack包还是数据包,在handle里判断
+#ifdef DEBUG
+    printf("%s", "check_for_data: ");
+    printf("%s", "收到数据包的长度： ");
+    printf("%d", get_plen(hdr) - get_hlen(hdr));
+    printf("\n");
+#endif
             plen = get_plen(hdr);
             pkt = malloc(plen);
             while(buf_size < plen){
@@ -387,7 +399,7 @@ void check_timeout(cmu_socket_t * sock){
  */
 void* begin_backend(void * in){
 #ifdef DEBUG
-    printf("%s", "begin_backend");
+    printf("%s", "begin_backend start");
     printf("\n");
 #endif
 
