@@ -5,7 +5,7 @@
 #define min3(A,B,C) (((A)> (B) ? (B) : (A)) > C) ? C : ((A) > (B) ? (B) : (A))
 
 void handle_ack(cmu_socket_t * sock, char * pkt){
-    uint32_t data_len, sample_RTT;
+    uint32_t sample_RTT;
     socklen_t conn_len = sizeof(sock -> conn);
     sent_pkt *pkts, *nexts;
     sock->window.rwnd = get_advertised_window(pkt);
@@ -67,7 +67,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             pkts = sock->window.sent_head;
             nexts = pkts->next;
             nexts->is_resend = TRUE;
-            sendto(sock->socket, nexts->pkt_start, get_plen(nexts), 0, (struct sockaddr*) &(sock->conn), conn_len);/* 快速重传一定是传缓存链表的第一个包，此处主要看看语法对不对 */
+            sendto(sock->socket, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);/* 快速重传一定是传缓存链表的第一个包，此处主要看看语法对不对 */
             sock->ack_dup = 0;
         }
     }
@@ -75,7 +75,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
 
 void handle_datapkt(cmu_socket_t * sock, char * pkt){
     char *rsp;
-    uint32_t data_len, seq, ack, rwnd;
+    uint32_t seq, ack, rwnd;
     socklen_t conn_len = sizeof(sock -> conn);
     recv_pkt *pktr, *prevr, *nextr;
     bool contins;
@@ -151,13 +151,7 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt){
  *
  */
 void handle_message(cmu_socket_t * sock, char * pkt){
-    char *rsp;
     uint8_t flags = get_flags(pkt);
-    uint32_t data_len, seq, ack, rwnd;
-    socklen_t conn_len = sizeof(sock -> conn);
-    struct sent_pkt *pkts, *nexts;
-    struct recv_pkt *pktr, *prevr, *nextr;
-    bool contins;
     switch(flags){
         case ACK_FLAG_MASK:
             handle_ack(sock, pkt);
@@ -315,7 +309,6 @@ void check_timeout(cmu_socket_t * sock){
 
             sendto(sockfd, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
         }
-        free(&now_time);
     }
 }
 
@@ -335,7 +328,6 @@ void* begin_backend(void * in){
     /* TODO：此处在三次握手中初始化 */
     dst->window.TimeoutInterval = 1000;
 
-    uint32_t time;
     struct timeval now_time;
 
     while(TRUE){
@@ -389,166 +381,7 @@ void* begin_backend(void * in){
             pthread_cond_signal(&(dst->wait_cond));
         }
     }
-    free(&now_time);
     pthread_exit(NULL);
     return NULL;
 }
 
-void print_state(cmu_socket_t *dst){
-    switch(dst->state){
-        case CLOSED:
-            printf("state: CLOSED\n");
-            break;
-        case LISTEN:
-            printf("state: LISTEN\n");
-            break;
-        case SYN_SENT:
-            printf("state: SYN_SENT\n");
-            break;
-        case SYN_RECVD:
-            printf("state: SYN_RECVD\n");
-            break;
-        case ESTABLISHED:
-            printf("state: ESTABLISHED\n");
-            break;
-        case FIN_WAIT_1:
-            printf("state: FIN_WAIT_1\n");
-            break;
-        case FIN_WAIT_2:
-            printf("state: FIN_WAIT_2\n");
-            break;
-        case CLOSING:
-            printf("state: CLOSING\n");
-            break;
-        case TIME_WAIT:
-            printf("state: TIME_WAIT\n");
-            break;
-        case CLOSE_WAIT:
-            printf("state: CLOSE_WAIT\n");
-            break;
-        case LAST_ACK:
-            printf("state: LAST_ACK\n");
-            break;
-    }
-}
-
-/* 发送SYN */
-void send_SYN(cmu_socket_t *dst){
-    /* resend表示是否为重发，考虑超时的情况，初始序列号应与上次相同 */
-    uint32_t ISN; /* 初始序列号 */
-    char *pkt;
-    if(dst->state == CLOSED){
-        ISN = rand() % SEQMAX; /* 随机数 */
-        dst->ISN = ISN;
-        while(pthread_mutex_lock(&(dst->window.ack_lock)) != 0);
-        dst->window.last_ack_received = ISN;
-        pthread_mutex_unlock(&(dst->window.ack_lock));
-
-    }else{
-        ISN = dst->ISN;
-    }
-    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port), ISN, 0, /* 初始ACK，任意值 */
-                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK, 1, 0, NULL, NULL, 0);
-    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-            &(dst->conn), sizeof(dst->conn));
-    free(pkt);
-    return;
-}
-
-void send_SYNACK(cmu_socket_t *dst){
-    uint32_t ISN; /* 初始序列号 */
-    char *pkt;
-    if(dst->state == LISTEN){
-        ISN = rand() % SEQMAX; /* 随机数 */
-        dst->ISN = ISN;
-        while(pthread_mutex_lock(&(dst->window.ack_lock)) != 0);
-        dst->window.last_ack_received = ISN;
-        pthread_mutex_unlock(&(dst->window.ack_lock));
-    }else{
-        ISN = dst->ISN;
-    }
-    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port), ISN,
-                            dst->window.last_seq_received+1, /* 对SYN的确认，ACK号为x+1 */
-                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
-                            SYN_FLAG_MASK | ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
-
-    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-            &(dst->conn), sizeof(dst->conn));
-    free(pkt);
-
-    return;
-}
-
-void send_ACK(cmu_socket_t *dst){
-    char *pkt;
-
-    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
-                            dst->window.last_ack_received,
-                            dst->window.last_seq_received+1,
-                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
-                            ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
-    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-            &(dst->conn), sizeof(dst->conn));
-    free(pkt);
-    return;
-}
-
-void handshake(cmu_socket_t *dst){
-    while(dst->state != ESTABLISHED){
-
-        switch(dst->state){
-            case CLOSED: // only client
-                send_SYN(dst);
-                dst->state = SYN_SENT;
-                break;
-            case SYN_SENT:
-                check_for_data(dst, TIMEOUT);
-                if(check_ack(dst, dst->ISN)){
-                    send_ACK(dst);
-                    dst->state = ESTABLISHED; /* 如果最后一次握手发送的ACK丢了 */
-                }
-                else{
-                    send_SYN(dst); // 重发SYN
-                }
-                break;
-            case LISTEN:
-                check_for_data(dst, NO_FLAG);  // 阻塞
-                send_SYNACK(dst);
-                dst->state = SYN_RECVD;
-                break;
-            case SYN_RECVD:
-                check_for_data(dst, TIMEOUT);
-                if(check_ack(dst, dst->ISN)){ // 接收ACK，不发送
-                    dst->state = ESTABLISHED;
-                } else{
-                    send_SYNACK(dst); // 超时，重发SYNACK
-                }
-                break;
-            default:
-                printf("Invalid state");
-        }
-    }
-}
-
-void send_FIN(cmu_socket_t *dst){
-    char *pkt;
-    while(pthread_mutex_lock(&(dst->window.ack_lock)) != 0);
-    dst->FSN = dst->window.last_ack_received;
-    pthread_mutex_unlock(&(dst->window.ack_lock));
-
-
-    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
-                            dst->FSN,
-                            dst->window.last_seq_received+1,
-                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
-                            ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
-    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-            &(dst->conn), sizeof(dst->conn));
-    free(pkt);
-    return;
-}
-
-
-void teardown(cmu_socket_t *dst){
-
-}

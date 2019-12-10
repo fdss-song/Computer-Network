@@ -172,6 +172,8 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
 
     while(pthread_mutex_lock(&(sock->window.recv_lock)) != 0);
 
+    // printf("%s\n", typeof());
+
     switch(flags){
         case NO_FLAG:
             while(sock->window.recv_length == 0){

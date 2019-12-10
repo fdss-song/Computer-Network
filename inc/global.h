@@ -46,7 +46,7 @@ typedef enum {
 }control_status;
 
 /* 每一个包的起始地址和发送时间 */
-typedef struct {
+typedef struct sent_pkt{
 	char *pkt_start; /* 包括头部 */
 	bool is_resend;
 	struct timeval sent_time; /* 用来计算RTT，单指第一次发送的时间 */
@@ -54,7 +54,7 @@ typedef struct {
 }sent_pkt;
 
 /* 缓存乱序到达的包的数据，此链表按照seq排序 */
-typedef struct {
+typedef struct recv_pkt{
 	char *data_start; /* 只有数据 */
 	uint32_t seq; /* 数据的序列号 */
 	uint32_t data_length; /* 数据长度 */
