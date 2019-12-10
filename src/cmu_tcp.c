@@ -46,6 +46,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     dst->type = flag;
     dst->dying = FALSE;
     pthread_mutex_init(&(dst->death_lock), NULL);
+    /* TODO:三次握手之后可以删掉 */
     dst->window.last_ack_received = 0;
     dst->window.last_seq_received = 0;
     pthread_mutex_init(&(dst->window.ack_lock), NULL);
@@ -115,6 +116,10 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     }
     getsockname(sockfd, (struct sockaddr *) &my_addr, &len);
     dst->my_port = ntohs(my_addr.sin_port);
+
+#ifdef DEBUG
+    printf("%s\n", "init");
+#endif
 
     pthread_create(&(dst->thread_id), NULL, begin_backend, (void *)dst);
     return EXIT_SUCCESS;
@@ -234,6 +239,13 @@ int cmu_write(cmu_socket_t * sock, char* src, int length){
     sock->sending_len += length;
 
     pthread_mutex_unlock(&(sock->send_lock));
+
+#ifdef DEBUG
+    printf("%s", "cmu_write over: ");
+    printf("sending_len = %d", sock->sending_len);
+    printf("\n");
+#endif
+
     return EXIT_SUCCESS;
 }
 
