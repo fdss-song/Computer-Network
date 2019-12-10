@@ -386,7 +386,6 @@ void check_timeout(cmu_socket_t * sock){
  *
  */
 void* begin_backend(void * in){
-
 #ifdef DEBUG
     printf("%s", "begin_backend");
     printf("\n");

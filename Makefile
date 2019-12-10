@@ -4,6 +4,8 @@ SRC_DIR = $(TOP_DIR)/src
 BUILD_DIR = $(TOP_DIR)/build
 TEST_DIR = $(TOP_DIR)/test
 
+# -DDEBUG
+
 CC=gcc
 FLAGS = -pthread -g -ggdb -Wall -DDEBUG -I$(INC_DIR)
 OBJS = $(BUILD_DIR)/cmu_packet.o \
