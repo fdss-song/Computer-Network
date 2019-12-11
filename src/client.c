@@ -12,22 +12,7 @@ void functionality(cmu_socket_t  * sock){
     int read;
     FILE *fp;
 
-//    cmu_write(sock, "hi there", 9);
-//    cmu_write(sock, "hi there2", 10);
-//    cmu_write(sock, "hi there3", 10);
-//    cmu_write(sock, "hi there4", 10);
-//    cmu_write(sock, "hi there5", 10);
-//    cmu_write(sock, "hi there6", 10);
-//    cmu_read(sock, buf, 200, NO_FLAG);
-//
-//    cmu_write(sock, "hi there", 9);
-//    cmu_read(sock, buf, 200, NO_FLAG);
-//    printf("R: %s\n", buf);
-//
-//    read = cmu_read(sock, buf, 200, NO_WAIT);
-//    printf("Read: %d\n", read);
-
-    fp = fopen("./src/cmu_tcp.c", "rb");
+    fp = fopen("./test/600K.file", "rb");
     read = 1;
     while(TRUE){
         while(read > 0 ) {
@@ -37,8 +22,6 @@ void functionality(cmu_socket_t  * sock){
             }
         }
     }
-
-    
 }
 
 /*

@@ -4,13 +4,7 @@
 #define min(A, B) ((A) > (B) ? (B) : (A))
 #define min3(A,B,C) (((A)> (B) ? (B) : (A)) > C) ? C : ((A) > (B) ? (B) : (A))
 
-
-
 void handle_ack(cmu_socket_t * sock, char * pkt){
-#ifdef DEBUG
-    printf("%s", "handle_ack start");
-    printf("\n");
-#endif
     uint32_t sample_RTT;
     socklen_t conn_len = sizeof(sock -> conn);
     sent_pkt *pkts, *nexts;
@@ -40,14 +34,8 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
         pkts = sock->window.sent_head;
         while((nexts = pkts->next) != NULL && get_seq(nexts->pkt_start) < get_ack(pkt)){//接收方处理
             pkts->next = nexts->next;
-
             //确定该ack时，才更新rtt, devRtt, timeoutInterval
-            printf("待确定的seq：%d\n",get_seq(nexts->pkt_start));
-            printf("数据长度：%d\n",get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start));
-            printf("收到的ack：%d\n",get_ack(pkt));
-
             if(get_seq(nexts->pkt_start)+ get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start) == get_ack(pkt) && !nexts->is_resend){
-//                printf("%s", "更新\n");
                 struct timeval arrival_time;
                 gettimeofday(&arrival_time, NULL);
                 sample_RTT = (arrival_time.tv_sec - nexts->sent_time.tv_sec) * 1000 + (arrival_time.tv_usec - nexts->sent_time.tv_usec) / 1000;
@@ -55,30 +43,27 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                 sock->window.EstimatedRTT = alpha * sample_RTT + (1 - alpha) * sock->window.EstimatedRTT;
                 sock->window.DevRTT = (1 - beta) * sock->window.DevRTT + beta * abs(sock->window.EstimatedRTT - sample_RTT);
 
-                sock->window.TimeoutInterval = sock->window.EstimatedRTT + 4 * sock->window.DevRTT;
-//                printf("rtt: %d\n",sock->window.EstimatedRTT);
-//                printf("timeout: %d\n",sock->window.TimeoutInterval );
+                /* 这里是调整超时时间，单独测丢包率时注释掉了 */
+//                sock->window.TimeoutInterval = sock->window.EstimatedRTT + 4 * sock->window.DevRTT;
             }
 
             sock->window.sent_length -= (get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start));/* 每释放一个缓存pkt需要将sent_length减小 */
-//            printf("%s", "本地free ack： ");
-//            printf("%d", get_seq(nexts->pkt_start));
-//            printf("\n");
+            printf("%s", "free seq : ");
+            printf("%d", get_seq(nexts->pkt_start));
+            printf("\n");
             free(nexts->pkt_start);
             free(nexts);
         }
     } else if(get_ack(pkt) == sock->window.last_ack_received){ /* 只考虑对窗口前一个包的重复ACK */
         sock->ack_dup += 1;
-        printf("%s", "收到冗余ack");
+        printf("%s", "dup ack ");
         printf("%d", get_ack(pkt));
         printf("\n");
         if(sock->window.con_state == FAST_RECO){
             sock->window.cwnd += MAX_DLEN;/* 如果已经处于快速恢复状态，则加上一个mss */
         }
         if(sock->ack_dup == 3){
-            printf("%s", "快速恢复:ack");
-            printf("%d", get_ack(pkt));
-            printf("\n");
+            printf("快速重传 : ack %d\n", get_ack(pkt));
 
             /* 立即快速重传，并进入快速恢复状态 */
             if(sock->window.con_state != FAST_RECO){
@@ -96,82 +81,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             sock->ack_dup = 0;
         }
     }
-#ifdef DEBUG
-    printf("%s", "handle_ack over");
-    printf("\n");
-#endif
 }
-
-//void handle_datapkt(cmu_socket_t * sock, char * pkt){
-//    char *rsp;
-//    uint32_t data_len, seq, ack, rwnd;
-//    socklen_t conn_len = sizeof(sock -> conn);
-//    recv_pkt *pktr, *prevr, *nextr;
-//    bool contins;
-//    seq = get_seq(pkt);
-//    /* 如果不是之前接收到的包，需要缓存下来； */
-//    if(seq >= sock->window.last_seq_received /* 因为只有长度不为0的包才会占用序号并被缓存 */
-//       || ((seq == sock->ISN+1) && (sock->window.last_seq_received == sock->ISN+1))/* 考虑三次握手刚建立好连接的时候 */
-//            ){
-//        /* 生成链表中要存储的pkt，确定pktr在链表中的顺序之后才能确定adjacent */
-//        pktr = malloc(sizeof(recv_pkt));
-//        pktr->seq = seq;
-//        pktr->data_length = get_plen(pkt) - get_hlen(pkt);
-//        pktr->data_start = malloc(pktr->data_length);
-//        memcpy(pktr->data_start, pkt + get_hlen(pkt), pktr->data_length);
-//        /* 因为此函数返回之后，pkt会free，所以需要malloc新的空间来存储 */
-//        pktr->adjacent = (seq == sock->window.last_seq_received);
-//        pktr->next = NULL;
-//        while(pthread_mutex_lock(&(sock->window.recv_lock)) != 0);
-//        sock->window.recv_length += pktr->data_length;
-//
-//        prevr = sock->window.recv_head;
-//        nextr = prevr->next;
-//
-//        if(nextr == NULL){
-//            nextr = pktr;
-//        } else {
-//            contins = TRUE;
-//            while(nextr != NULL){
-//                if(nextr->seq > seq){ /* 找到插入的位置，通过更改指针插入 */
-//                    prevr->next = pktr;
-//                    pktr->next = nextr;
-//                    if(nextr->seq == seq + pktr->data_length){ /* 如果nextr与pkt相邻 */
-//                        nextr->adjacent = TRUE;
-//                    }
-//                }
-//
-//                if(!nextr->adjacent){ /* 如果adjacent为FALSE，说明可以读的链表在此处断掉 */
-//                    contins = FALSE;
-//                }
-//
-//                if(contins){ /* 如果从第一个包开始连续可读，那么更改last_seq_received */
-//                    sock->window.last_seq_received = prevr->seq + prevr->data_length;
-//                }
-//
-//                prevr = prevr->next;
-//                nextr = prevr->next;
-//            }
-//
-//            if(seq > prevr->seq){
-//                nextr = pktr;
-//            }
-//        }
-//    }
-//    seq = sock->window.last_ack_received + sock->window.sent_length;
-//    ack = sock->window.last_seq_received; /* 累积确认 */
-//    rwnd = MAX_NETWORK_BUFFER - sock->window.recv_length;
-//    pthread_mutex_unlock(&(sock->window.recv_lock)); /* 保证在最小范围上加锁，但是此处的unlock可能是多余的，不过不影响正确性 */
-//    rsp = create_packet_buf(sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
-//                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, ACK_FLAG_MASK, rwnd, 0, NULL, NULL, 0);
-//    sendto(sock->socket, rsp, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
-//            &(sock->conn), conn_len);
-//    free(rsp);
-//}
-
-
-
-
 
 
 
@@ -184,17 +94,14 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt) {
     bool contains = TRUE;/* 用于判断该数据包是否已经被插入 */
     seq = get_seq(pkt);
     /* 如果不是之前接收到的包，需要缓存下来； */
-
     if (seq >= sock->window.last_seq_received/*因为只有长度不为0的包才会占用序号并被缓存*/
-        || ((seq == sock->ISN + 1) && (sock->window.last_seq_received == sock->ISN + 1))/*考虑三次握手刚建立好连接的时候*/
-            ) {
-        printf("recv seq:%d\n",seq);
+    || ((seq == sock->ISN + 1) && (sock->window.last_seq_received == sock->ISN + 1))/*考虑三次握手刚建立好连接的时候*/
+    ) {
+        printf("recv seq: %d\n",seq);
         /*生成链表中要存储的pkt，确定pktr在链表中的顺序之后才能确定adjacent*/
         pktr = malloc(sizeof(recv_pkt));
         pktr->seq = seq;
         pktr->data_length = get_plen(pkt) - get_hlen(pkt);
-//        printf("save pkt len:%d\n",pktr->data_length);
-        printf("save pkt seq:%d\n",seq);
         pktr->data_start = malloc(pktr->data_length);
         memcpy(pktr->data_start, pkt + get_hlen(pkt), pktr->data_length);
         /*因为此函数返回之后，pkt会free，所以需要malloc新的空间来存储*/
@@ -205,9 +112,6 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt) {
 
         prevr = sock->window.recv_head;
         nextr = prevr->next;
-
-//        printf("现在的last_seq:%d\n",sock->window.last_seq_received);
-//        printf("收到的seq:%d\n",seq);
 
         if (nextr == NULL) {
             prevr->next = pktr;
@@ -233,19 +137,16 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt) {
                 prevr->next = pktr;
             }
         }
-
         if(contains){
-            /* 两次遍历好难受啊，/(ㄒoㄒ)/~~ */
+            /* 两次遍历好难受啊，/(ㄒoㄒ)/~~，那也没办法，能跑动就很不错了！ */
             prevr = sock->window.recv_head;
             while ((nextr = prevr->next) != NULL && nextr->adjacent) {/*此处为了找到第一个adjacent为false或者整个列表最后一个struct*/
                 prevr = nextr;
             }
-//            printf("已确认的seq  %d\n", prevr->seq);
-//            printf("现在确认的长度  %d\n", prevr->data_length);
-            sock->window.last_seq_received = prevr->seq + prevr->data_length;
-//            printf("更改last_seq  %d\n", sock->window.last_seq_received);
+            if(prevr != NULL)/* 之前的bug就是这里引起的，如果第一个包的adjacent为false，则prevr的seq和len就是0，所以才会一直发0 */
+                sock->window.last_seq_received = prevr->seq + prevr->data_length;
+            printf("update wait seq: %d\n",sock->window.last_seq_received);
         }
-
     }
     seq = sock->window.last_ack_received + sock->window.sent_length;
     ack = sock->window.last_seq_received; /* 累积确认 */
@@ -426,9 +327,9 @@ void check_timeout(cmu_socket_t * sock){
             printf("%s", "超时重发seq ");
             printf("%d", get_seq(nexts->pkt_start));
             printf("\n");
-            sock->window.TimeoutInterval = 2 * sock->window.TimeoutInterval; /* 超时，时间间隔加倍 */
-//            printf("timeout: %d\n",sock->window.TimeoutInterval );
 
+            /* 这里是调整超时时间，单独测丢包率时注释掉了 */
+//            sock->window.TimeoutInterval = 2 * sock->window.TimeoutInterval; /* 超时，时间间隔加倍 */
             nexts->is_resend = TRUE;
             gettimeofday(&(nexts->sent_time), NULL);
 
@@ -437,7 +338,7 @@ void check_timeout(cmu_socket_t * sock){
             sock->window.cwnd = MAX_DLEN;
             sock->ack_dup = 0;
             sock->window.con_state = SLOW_STAR;
-
+            printf("time ： %d", sock->window.TimeoutInterval);
             sendto(sockfd, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
         }
     }
@@ -451,11 +352,6 @@ void check_timeout(cmu_socket_t * sock){
  *
  */
 void* begin_backend(void * in){
-#ifdef DEBUG
-    printf("%s", "begin_backend start");
-    printf("\n");
-#endif
-
     cmu_socket_t * dst = (cmu_socket_t *) in;
     int death, send_signal, window_size;
     char *data, *temp;
@@ -483,15 +379,6 @@ void* begin_backend(void * in){
         if(buf_len > 0){/* 有数据要发时才会，如果没数据就直接跳过，所以在外面套了一层判断 */
             window_size = min(dst->window.cwnd, dst->window.rwnd);
             length = min3(buf_len, MAX_DLEN, window_size - dst->window.sent_length);
-
-#ifdef DEBUG
-    printf("%s", "begin_backend: 可发送数据长度");
-    printf("%d", length);
-    printf("\n");
-#endif
-
-
-
             length = length > 0 ? length : 1;/* 如果length小于0，在这里把它重新赋值为1 */
 
             data = malloc(length);
@@ -514,7 +401,6 @@ void* begin_backend(void * in){
         check_for_data(dst, NO_WAIT); /* 检查有没有收到数据 */
 
         check_timeout(dst); /* 检查是否超时 */
-
 
         /* TODO：如果此时数据还没有接受完全，那么读出的数据是不完整的 */
         /* 检查接收缓冲区有没有内容，如果有就读 */

@@ -12,29 +12,13 @@ void functionality(cmu_socket_t  * sock) {
     FILE *fp;
     int n;
 
-
-//     n = cmu_read(sock, buf, 200, NO_FLAG);
-//    printf("R: %s\n", buf);
-//    printf("N: %d\n", n);
-//    cmu_write(sock, "hi there", 9);
-//    cmu_read(sock, buf, 200, NO_FLAG);
-//    cmu_write(sock, "hi there", 9);
-//
-//    sleep(5);
-
-
-
+    /* 此处传输文件的大小可调，自己生成的测试文件已放在test文件夹中 */
     fp = fopen("./test/file.c", "w+");
-//    sleep(2);
     while(TRUE){
         n = cmu_read(sock, buf, 9898, NO_FLAG);
-//        printf("N: %d\n", n);
         fwrite(buf, 1, n, fp);
+//        sleep(1);
     }
-//    n = cmu_read(sock, buf, 9898, NO_FLAG);
-//    printf("N: %d\n", n);
-//    fwrite(buf, 1, n, fp);
-
 }
 
 

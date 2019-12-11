@@ -172,7 +172,6 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
 
     while(pthread_mutex_lock(&(sock->window.recv_lock)) != 0);
 
-
     switch(flags){
         case NO_FLAG:
             while(sock->window.recv_length == 0){
@@ -231,10 +230,6 @@ int cmu_write(cmu_socket_t * sock, char* src, int length){
         sock->sending_buf = realloc(sock->sending_buf, length + sock->sending_len);
     memcpy(sock->sending_buf + sock->sending_len, src, length);
     sock->sending_len += length;
-
-#ifdef DEBUG
-    printf("sending len : %d\n",sock->sending_len);
-#endif
 
     pthread_mutex_unlock(&(sock->send_lock));
 
