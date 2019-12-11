@@ -35,7 +35,8 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
         while((nexts = pkts->next) != NULL && get_seq(nexts->pkt_start) < get_ack(pkt)){//接收方处理
             pkts->next = nexts->next;
             //确定该ack时，才更新rtt, devRtt, timeoutInterval
-            if(get_seq(nexts->pkt_start)+ get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start) == get_ack(pkt) && !nexts->is_resend){
+            if(get_seq(nexts->pkt_start) + get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start) == get_ack(pkt) && !nexts->is_resend){
+//                if(!nexts->is_resend){
                 struct timeval arrival_time;
                 gettimeofday(&arrival_time, NULL);
                 sample_RTT = (arrival_time.tv_sec - nexts->sent_time.tv_sec) * 1000 + (arrival_time.tv_usec - nexts->sent_time.tv_usec) / 1000;
@@ -44,7 +45,10 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                 sock->window.DevRTT = (1 - beta) * sock->window.DevRTT + beta * abs(sock->window.EstimatedRTT - sample_RTT);
 
                 /* 这里是调整超时时间，单独测丢包率时注释掉了 */
-//                sock->window.TimeoutInterval = sock->window.EstimatedRTT + 4 * sock->window.DevRTT;
+//                printf("rtt: %d\n", sock->window.EstimatedRTT);
+//                printf("dvrtt: %d\n", sock->window.DevRTT);
+                sock->window.TimeoutInterval = sock->window.EstimatedRTT + 4 * sock->window.DevRTT;
+                printf("update timeout: %d\n", sock->window.TimeoutInterval);
             }
 
             sock->window.sent_length -= (get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start));/* 每释放一个缓存pkt需要将sent_length减小 */
@@ -63,7 +67,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             sock->window.cwnd += MAX_DLEN;/* 如果已经处于快速恢复状态，则加上一个mss */
         }
         if(sock->ack_dup == 3){
-            printf("快速重传 : ack %d\n", get_ack(pkt));
+            printf("快速重传 : ack : %d\n", get_ack(pkt));
 
             /* 立即快速重传，并进入快速恢复状态 */
             if(sock->window.con_state != FAST_RECO){
@@ -71,14 +75,16 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                 sock->window.cwnd = sock->window.ssthresh + 3 * MAX_DLEN;
                 sock->window.con_state = FAST_RECO;
             }
+
             pkts = sock->window.sent_head;
             nexts = pkts->next;
-            nexts->is_resend = TRUE;
-            gettimeofday(&(nexts->sent_time), NULL);
+            if(nexts != NULL){
+                nexts->is_resend = TRUE;
+                gettimeofday(&(nexts->sent_time), NULL);
 
-
-            sendto(sock->socket, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);/* 快速重传一定是传缓存链表的第一个包，此处主要看看语法对不对 */
-            sock->ack_dup = 0;
+                sendto(sock->socket, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);/* 快速重传一定是传缓存链表的第一个包，此处主要看看语法对不对 */
+                sock->ack_dup = 0;
+            }
         }
     }
 }
@@ -143,9 +149,12 @@ void handle_datapkt(cmu_socket_t * sock, char * pkt) {
             while ((nextr = prevr->next) != NULL && nextr->adjacent) {/*此处为了找到第一个adjacent为false或者整个列表最后一个struct*/
                 prevr = nextr;
             }
-            if(prevr != NULL)/* 之前的bug就是这里引起的，如果第一个包的adjacent为false，则prevr的seq和len就是0，所以才会一直发0 */
+            if(prevr != NULL){
                 sock->window.last_seq_received = prevr->seq + prevr->data_length;
-            printf("update wait seq: %d\n",sock->window.last_seq_received);
+                printf("update wait seq: %d\n",sock->window.last_seq_received);
+            }/* 之前的bug就是这里引起的，如果第一个包的adjacent为false，则prevr的seq和len就是0，所以才会一直发0 */
+            else
+                printf("now prevr isNULL , wait seq: %d\n",sock->window.last_seq_received);
         }
     }
     seq = sock->window.last_ack_received + sock->window.sent_length;
@@ -329,16 +338,16 @@ void check_timeout(cmu_socket_t * sock){
             printf("\n");
 
             /* 这里是调整超时时间，单独测丢包率时注释掉了 */
-//            sock->window.TimeoutInterval = 2 * sock->window.TimeoutInterval; /* 超时，时间间隔加倍 */
+            sock->window.TimeoutInterval = 2 * sock->window.TimeoutInterval; /* 超时，时间间隔加倍 */
             nexts->is_resend = TRUE;
             gettimeofday(&(nexts->sent_time), NULL);
 
+            printf("timeout: %d\n", sock->window.TimeoutInterval);
             //更新状态
             sock->window.ssthresh = sock->window.cwnd / 2;
             sock->window.cwnd = MAX_DLEN;
             sock->ack_dup = 0;
             sock->window.con_state = SLOW_STAR;
-            printf("time ： %d", sock->window.TimeoutInterval);
             sendto(sockfd, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
         }
     }

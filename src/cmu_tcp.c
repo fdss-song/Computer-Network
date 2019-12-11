@@ -185,12 +185,14 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
                     read_len += nexts->data_length;
                     sock->window.recv_length -= nexts->data_length;
                     pkts->next = nexts->next;
+                    printf("free seq : %d\n",nexts->seq);
                     free(nexts->data_start);
                     free(nexts);
                 } else if(length - read_len < nexts->data_length && nexts->adjacent){/* 剩余要读的内容小于等于recv_pkt的长度，并且该recv_pkt是能够直接读的，只在recv_pkt中取出部分 */
                     memcpy(dst + read_len, nexts->data_start, length - read_len);
                     new_buf = malloc(nexts->data_length - (length - read_len));//剩余的长度
                     memcpy(new_buf, nexts->data_start + (length - read_len), nexts->data_length - (length - read_len));
+                    printf("free seq : %d\n",nexts->seq);
                     free(nexts->data_start);
                     nexts->data_start = new_buf;
                     nexts->seq += length - read_len;

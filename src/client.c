@@ -12,7 +12,7 @@ void functionality(cmu_socket_t  * sock){
     int read;
     FILE *fp;
 
-    fp = fopen("./test/600K.file", "rb");
+    fp = fopen("./test/20M.txt", "rb");
     read = 1;
     while(TRUE){
         while(read > 0 ) {
