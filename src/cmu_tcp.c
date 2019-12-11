@@ -53,8 +53,8 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
 
     dst->ack_dup=0;
 
-    dst->window.rwnd=WINDOW_INITIAL_WINDOW_SIZE;
-    dst->window.cwnd=WINDOW_INITIAL_WINDOW_SIZE;
+    dst->window.rwnd=WINDOW_INITIAL_WINDOW_SIZE * MAX_DLEN;
+    dst->window.cwnd=WINDOW_INITIAL_WINDOW_SIZE * MAX_DLEN;
     dst->window.EstimatedRTT=WINDOW_INITIAL_RTT;
     dst->window.DevRTT=0;
 
