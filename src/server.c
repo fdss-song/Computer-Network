@@ -7,15 +7,24 @@
  *  the sockets will be used.
  *
  */
-void functionality(cmu_socket_t  * sock) {
+void functionality(cmu_socket_t  * sock){
     char buf[9898];
     FILE *fp;
     int n;
-    fp = fopen("./test/file.c", "w+");
-    sleep(2);
+
+    n = cmu_read(sock, buf, 200, NO_FLAG);
+    printf("R: %s\n", buf);
+    printf("N: %d\n", n);
+    cmu_write(sock, "hi there", 9);
+    cmu_read(sock, buf, 200, NO_FLAG);
+    cmu_write(sock, "hi there", 9);
+
+    sleep(5);
     n = cmu_read(sock, buf, 9898, NO_FLAG);
     printf("N: %d\n", n);
+    fp = fopen("./test/file.c", "w+");
     fwrite(buf, 1, n, fp);
+
 }
 
 
@@ -27,7 +36,7 @@ void functionality(cmu_socket_t  * sock) {
  *
  */
 int main(int argc, char **argv) {
-	int portno;
+    int portno;
     char *serverip;
     char *serverport;
     cmu_socket_t socket;

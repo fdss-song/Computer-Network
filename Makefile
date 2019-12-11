@@ -7,7 +7,7 @@ TEST_DIR = $(TOP_DIR)/test
 # -DDEBUG
 
 CC=gcc
-FLAGS = -pthread -g -ggdb -Wall -DDEBUG -I$(INC_DIR)
+FLAGS = -pthread -g -ggdb -Wall -I$(INC_DIR)
 OBJS = $(BUILD_DIR)/cmu_packet.o \
 	$(BUILD_DIR)/cmu_tcp.o \
 	$(BUILD_DIR)/backend.o

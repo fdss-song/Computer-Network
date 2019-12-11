@@ -80,7 +80,6 @@ typedef struct {
 	uint32_t EstimatedRTT;
 	uint32_t DevRTT;
 	uint32_t ssthresh; /* ssthresh */
-	bool timer_on; /* 计时器是否设置 */
 	control_status con_state;/* 用于拥塞控制算法表示状态 */
 	uint32_t TimeoutInterval;
 }slide_window_t;

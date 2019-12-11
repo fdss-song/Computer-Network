@@ -9,7 +9,7 @@
  */
 
 //window variables
-#define WINDOW_INITIAL_WINDOW_SIZE 4000
+#define WINDOW_INITIAL_WINDOW_SIZE 1
 #define WINDOW_INITIAL_SSTHRESH 64
 #define WINDOW_INITIAL_RTT 3000	// ms
 #define WINDOW_INITIAL_ADVERTISED 1 //max packet sizes

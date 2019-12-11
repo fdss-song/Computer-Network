@@ -59,7 +59,6 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     dst->window.DevRTT=0;
 
     dst->window.ssthresh=WINDOW_INITIAL_SSTHRESH;
-    dst->window.timer_on=FALSE;
     dst->window.con_state=SLOW_STAR;
     dst->window.TimeoutInterval=1000;
 
@@ -117,10 +116,6 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     getsockname(sockfd, (struct sockaddr *) &my_addr, &len);
     dst->my_port = ntohs(my_addr.sin_port);
 
-#ifdef DEBUG
-    printf("%s\n", "init");
-#endif
-
     pthread_create(&(dst->thread_id), NULL, begin_backend, (void *)dst);
     return EXIT_SUCCESS;
 }
@@ -177,7 +172,6 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
 
     while(pthread_mutex_lock(&(sock->window.recv_lock)) != 0);
 
-    // printf("%s\n", typeof());
 
     switch(flags){
         case NO_FLAG:
@@ -237,16 +231,12 @@ int cmu_write(cmu_socket_t * sock, char* src, int length){
         sock->sending_buf = realloc(sock->sending_buf, length + sock->sending_len);
     memcpy(sock->sending_buf + sock->sending_len, src, length);
     sock->sending_len += length;
+
+#ifdef DEBUG
     printf("sending len : %d\n",sock->sending_len);
+#endif
 
     pthread_mutex_unlock(&(sock->send_lock));
 
-#ifdef DEBUG
-    printf("%s", "cmu_write over: ");
-    printf("sending_len = %d", sock->sending_len);
-    printf("\n");
-#endif
-
     return EXIT_SUCCESS;
 }
-
