@@ -135,6 +135,8 @@ int cmu_close(cmu_socket_t * sock){
 
     pthread_join(sock->thread_id, NULL);
 
+    while(sock->window.sent_length !=0)
+        sleep(2);
     if(sock != NULL){
         if(sock->window.recv_head != NULL)
             free(sock->window.recv_head);
