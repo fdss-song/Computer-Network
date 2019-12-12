@@ -7,17 +7,23 @@
  *  the sockets will be used.
  *
  */
-void functionality(cmu_socket_t  * sock) {
+void functionality(cmu_socket_t  * sock){
     char buf[9898];
     FILE *fp;
     int n;
 
-    /* 此处传输文件的大小可调，自己生成的测试文件已放在test文件夹中 */
+    n = cmu_read(sock, buf, 200, NO_FLAG);
+    printf("R: %s\n", buf);
+    printf("N: %d\n", n);
+    cmu_write(sock, "hi there", 9);
+    cmu_read(sock, buf, 200, NO_FLAG);
+    cmu_write(sock, "hi there", 9);
+
+    sleep(5);
     fp = fopen("./test/file.c", "w+");
     while(TRUE){
-        n = cmu_read(sock, buf, 9898, NO_FLAG);
-        fwrite(buf, 1, n, fp);
-//        sleep(1);
+    	n = cmu_read(sock, buf, 9898, NO_FLAG);    
+    	fwrite(buf, 1, n, fp);
     }
 }
 
@@ -30,7 +36,7 @@ void functionality(cmu_socket_t  * sock) {
  *
  */
 int main(int argc, char **argv) {
-	int portno;
+    int portno;
     char *serverip;
     char *serverport;
     cmu_socket_t socket;
