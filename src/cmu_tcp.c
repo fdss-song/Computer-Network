@@ -1,5 +1,201 @@
 #include "cmu_tcp.h"
 
+/* 发送SYN */ /* TODO:可以优化，当前重发SYN会重新malloc */
+void send_SYN(cmu_socket_t *dst){
+    srand((unsigned)time(NULL));
+    /* 根据客户端当前的状态判断是否需要重发SYN */
+    uint32_t ISN; /* 初始序列号 */
+    char *pkt;
+    if(dst->state == CLOSED){
+        ISN = rand() % SEQMAX; /* 随机数 */
+        dst->ISN = ISN;
+        dst->window.last_ack_received = ISN + 1; /* 此时只有前端线程，不需要加锁 */
+    }else{
+        ISN = dst->ISN;
+    }
+    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port), ISN, 0, /* 初始ACK，任意值 */
+                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK, 1, 0, NULL, NULL, 0);
+    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+            &(dst->conn), sizeof(dst->conn));
+    free(pkt);
+    return;
+}
+
+/* TODO：可以优化，缓存SYNACK，可能性能提高不多 */
+void send_SYNACK(cmu_socket_t *dst){
+  uint32_t ISN; /* 初始序列号 */
+  char *pkt;
+  /* 根据当前状态判断是否要重发SYNACK */
+  if(dst->state == LISTEN){
+    ISN = rand() % SEQMAX; /* 随机数 */
+    dst->ISN = ISN;
+    dst->window.last_ack_received = ISN;
+  }else{
+    ISN = dst->ISN;
+  }
+  pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port), ISN,
+                  dst->window.last_seq_received, /* 对SYN的确认，ACK号为x+1 */
+                  DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
+                  SYN_FLAG_MASK | ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+  sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+            &(dst->conn), sizeof(dst->conn));
+  free(pkt);
+  return;
+}
+
+void send_ACK(cmu_socket_t *dst){
+  char *pkt;
+
+  pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
+                            dst->window.last_ack_received,
+                            dst->window.last_seq_received,
+                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
+                            ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+  sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+            &(dst->conn), sizeof(dst->conn));
+  free(pkt);
+    return;
+}
+
+void handle_handshake(cmu_socket_t *sock, char *pkt){
+    uint8_t flags = get_flags(pkt);
+    switch(sock->state){
+        case LISTEN:
+            if(flags == SYN_FLAG_MASK){
+                sock->window.last_seq_received = get_seq(pkt) + 1;
+                send_SYNACK(sock);
+                sock->state = SYN_RCVD;
+            }
+            break;
+        case SYN_RCVD:
+            sock->state = ESTABLISHED;  /* 无论是否收到ACK，都完成连接 */
+            break;
+        case SYN_SENT:
+            if(flags == (SYN_FLAG_MASK | ACK_FLAG_MASK)){
+                send_ACK(sock);
+                sock->state = ESTABLISHED;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+/* 超时和阻塞 */
+void check_for_handshake(cmu_socket_t *sock, int flags){
+    char hdr[DEFAULT_HEADER_LEN];
+    char* pkt;
+    socklen_t conn_len = sizeof(sock->conn);
+    ssize_t len = -1;
+    uint32_t plen = 0, buf_size = 0, n = 0;
+    fd_set ackFD;
+
+    struct timeval time_out;
+    time_out.tv_sec = 3;
+    time_out.tv_usec = 0;
+
+    switch(flags){
+        case NO_FLAG: /* wait */
+            while(len < DEFAULT_HEADER_LEN)
+                len = recvfrom(sock->socket, hdr, DEFAULT_HEADER_LEN, MSG_PEEK,
+                               (struct sockaddr *) &(sock->conn), &conn_len);
+            break;
+        case TIMEOUT:/* 设定超时间隔 */
+            FD_ZERO(&ackFD);
+            FD_SET(sock->socket, &ackFD);
+            if(select(sock->socket+1 /* 重要：所有的文件描述符最大值+1 */, &ackFD, NULL, NULL, &time_out) <= 0){
+                break;
+            }
+            len = recvfrom(sock->socket, hdr, DEFAULT_HEADER_LEN, MSG_DONTWAIT | MSG_PEEK,
+                               (struct sockaddr *) &(sock->conn), &conn_len);
+            break;
+        default:
+            perror("ERROR unknown flag");
+            return;
+    }
+
+    if(len >= DEFAULT_HEADER_LEN){ /* 如果此处收到了一个完整的头部，那么循环判断等待完全收到这个包之后handle处理 */
+        plen = get_plen(hdr);
+        pkt = malloc(plen);
+        while(buf_size < plen){
+            n = recvfrom(sock->socket, pkt + buf_size, plen - buf_size,
+                    NO_FLAG, (struct sockaddr *) &(sock->conn), &conn_len);
+            buf_size = buf_size + n;
+        }
+
+        handle_handshake(sock, pkt);
+        free(pkt);
+    } 
+}
+
+void handshake(cmu_socket_t *dst){
+    while(dst->state != ESTABLISHED){
+        switch(dst->state){
+            case CLOSED:
+                if(dst->type == TCP_INITATOR){
+                    send_SYN(dst);
+                    dst->state = SYN_SENT;
+                } else if(dst->type == TCP_LISTENER){
+                    dst->state = LISTEN;
+                }
+                break;
+            case SYN_SENT:
+                check_for_handshake(dst, TIMEOUT);
+                if(dst->state == SYN_SENT){
+                    send_SYN(dst);
+                }
+                break;
+            case LISTEN:
+                check_for_handshake(dst, NO_FLAG);
+                break;
+            case SYN_RCVD:
+                check_for_handshake(dst, TIMEOUT);
+                break;
+            default:
+                printf("Invalid state");
+                break;
+        }
+    }
+}
+
+void send_FIN(cmu_socket_t *dst){
+  char *pkt;
+  while(pthread_mutex_lock(&(dst->window.ack_lock)) != 0);
+  dst->FSN = dst->window.last_ack_received;
+  pthread_mutex_unlock(&(dst->window.ack_lock));
+
+  pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
+                dst->FSN, dst->window.last_seq_received+1,
+                DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
+                ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+  sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+          &(dst->conn), sizeof(dst->conn));
+  free(pkt);
+  return;
+}
+
+
+void teardown(cmu_socket_t *sock){
+    while(sock->state != CLOSED){
+        switch(sock->state){
+            case FIN_WAIT_1:
+                break;
+            case FIN_WAIT_2:
+                break;
+            case TIME_WAIT:
+                break;
+            case CLOSE_WAIT:
+                break;
+            case LAST_ACK:
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+
+
 /*
  * Param: dst - The structure where socket information will be stored
  * Param: flag - A flag indicating the type of socket(Listener / Initiator)
@@ -35,6 +231,8 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     spkt->next=NULL;
     rpkt->next=NULL;
 
+    dst->state = CLOSED;
+
     dst->window.recv_head = rpkt;
     dst->window.recv_length = 0;
     pthread_mutex_init(&(dst->window.recv_lock), NULL);
@@ -53,8 +251,8 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
 
     dst->ack_dup=0;
 
-    dst->window.rwnd=WINDOW_INITIAL_WINDOW_SIZE * MAX_DLEN;
-    dst->window.cwnd=WINDOW_INITIAL_WINDOW_SIZE * MAX_DLEN;
+    dst->window.rwnd=WINDOW_INITIAL_WINDOW_SIZE;
+    dst->window.cwnd=WINDOW_INITIAL_WINDOW_SIZE;
     dst->window.EstimatedRTT=WINDOW_INITIAL_RTT;
     dst->window.DevRTT=0;
 
@@ -90,8 +288,9 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
                 return EXIT_ERROR;
             }
 
+            handshake(dst);
+            
             break;
-
         case(TCP_LISTENER):
             bzero((char *) &conn, sizeof(conn));
             conn.sin_family = AF_INET;
@@ -107,6 +306,9 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
                 return EXIT_ERROR;
             }
             dst->conn = conn;
+
+            handshake(dst);
+
             break;
 
         default:
@@ -129,14 +331,15 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
  *
  */
 int cmu_close(cmu_socket_t * sock){
+    while(sock->window.sent_length != 0)
+        sleep(2);
+
     while(pthread_mutex_lock(&(sock->death_lock)) != 0);
     sock->dying = TRUE;
     pthread_mutex_unlock(&(sock->death_lock));
 
     pthread_join(sock->thread_id, NULL);
-
-    while(sock->window.sent_length !=0)
-        sleep(2);
+    
     if(sock != NULL){
         if(sock->window.recv_head != NULL)
             free(sock->window.recv_head);
@@ -181,27 +384,27 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
             }
         case NO_WAIT:
             pkts = sock->window.recv_head;
-            while((nexts = pkts->next) != NULL && read_len < length){/* 还需要继续读，并且有数据可读 */
-                if(length - read_len >= nexts->data_length && nexts->adjacent){/* 剩余要读的内容大于下一个recv_pkt的长度，并且该recv_pkt是能够直接读的，直接把整个pkt中的内容取出 */
+            while((nexts = pkts->next) != NULL && read_len < length && nexts->adjacent){/* 还需要继续读，并且有数据可读 */
+                if(length - read_len >= nexts->data_length){/* 剩余要读的内容大于下一个recv_pkt的长度，并且该recv_pkt是能够直接读的，直接把整个pkt中的内容取出 */
                     memcpy(dst + read_len, nexts->data_start, nexts->data_length);
                     read_len += nexts->data_length;
                     sock->window.recv_length -= nexts->data_length;
                     pkts->next = nexts->next;
-                    printf("free seq : %d\n",nexts->seq);
                     free(nexts->data_start);
                     free(nexts);
-                } else if(length - read_len < nexts->data_length && nexts->adjacent){/* 剩余要读的内容小于等于recv_pkt的长度，并且该recv_pkt是能够直接读的，只在recv_pkt中取出部分 */
+                } 
+                else if(length - read_len < nexts->data_length){/* 剩余要读的内容小于等于recv_pkt的长度，并且该recv_pkt是能够直接读的，只在recv_pkt中取出部分 */
                     memcpy(dst + read_len, nexts->data_start, length - read_len);
                     new_buf = malloc(nexts->data_length - (length - read_len));//剩余的长度
                     memcpy(new_buf, nexts->data_start + (length - read_len), nexts->data_length - (length - read_len));
-                    printf("free seq : %d\n",nexts->seq);
                     free(nexts->data_start);
                     nexts->data_start = new_buf;
                     nexts->seq += length - read_len;
                     nexts->data_length -= length - read_len;
                     sock->window.recv_length -= length - read_len;
                     read_len = length;
-                } else{
+                } 
+                else{
                     //读到一个不能读的recv_pkt,什么也不做,跳出while循环
                     break;
                 }
