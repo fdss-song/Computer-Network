@@ -24,12 +24,11 @@
 
 #define SEQMAX 0xffffffff
 
-
 typedef enum {
 	CLOSED, /* 0 */
 	LISTEN, /* 1 */
 	SYN_SENT, /* 2 */
-	SYN_RECVD, /* 3 */
+	SYN_RCVD, /* 3 */
 	ESTABLISHED, /* 4 */
 	FIN_WAIT_1, /* 5 */
 	FIN_WAIT_2, /* 6 */
