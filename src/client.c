@@ -27,13 +27,12 @@ void functionality(cmu_socket_t  * sock){
     read = cmu_read(sock, buf, 200, NO_WAIT);
     printf("Read: %d\n", read);
 
-    // fp = fopen("./src/cmu_tcp.c", "rb");
-    fp = fopen("./test/600K.file", "rb");
+    fp = fopen("./src/cmu_tcp.c", "rb");
+    // fp = fopen("./test/600K.file", "r");
     
     read = 1;
     while(read > 0 ){
         read = fread(buf, 1, 9898, fp);
-        // sleep(3);
         if(read > 0)
             cmu_write(sock, buf, read);
     }
@@ -74,5 +73,10 @@ int main(int argc, char **argv) {
 
     if(cmu_close(&socket) < 0)
         exit(EXIT_FAILURE);
+
+#ifdef DEBUG
+    printf("slen = %d\n", slen);
+#endif
+
     return EXIT_SUCCESS;
 }
