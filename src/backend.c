@@ -72,7 +72,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                     sock->window.con_state = CONG_AVOI;
                 break;
             case CONG_AVOI: /* 拥塞避免状态 */
-                sock->window.cwnd += MAX_DLEN * MAX_DLEN/sock->window.cwnd;
+                sock->window.cwnd += MAX_DLEN * MAX_DLEN / sock->window.cwnd;
                 break;
             case FAST_RECO: /* 快速恢复 */
                 sock->window.cwnd = sock->window.ssthresh;
@@ -101,7 +101,8 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             }
 
             sock->window.sent_length -= (get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start));/* 每释放一个缓存pkt需要将sent_length减小 */
-
+//            printf("本地缓存的长度:%d\n", sock->window.sent_length);
+//            printf("本次释放的长度:%d\n\n", (get_plen(nexts->pkt_start) - get_hlen(nexts->pkt_start)));
             free(nexts->pkt_start);
             free(nexts);
         }
@@ -112,6 +113,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             sock->window.cwnd += MAX_DLEN;/* 如果已经处于快速恢复状态，则加上一个mss */
         }
         if(sock->ack_dup == 3){
+            printf("快速重传了！！！\n");
             /* 立即快速重传，并进入快速恢复状态 */
             if(sock->window.con_state != FAST_RECO){
                 sock->window.ssthresh = sock->window.cwnd / 2;
@@ -128,6 +130,12 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
             }
         }
     }
+
+    if(sock->window.sent_length == 0){
+//        printf("ssssss\n");
+        sock->window.sent_head->next = NULL;
+    }
+
 }
 
 void handle_datapkt(cmu_socket_t *sock, char *pkt){
@@ -238,8 +246,10 @@ void handle_message(cmu_socket_t * sock, char * pkt){
     switch(flags){
         case ACK_FLAG_MASK:
             if(sock->state == FIN_WAIT_1){
+                printf("客户端连接结束\n");
                 handle_FIN1_ACK(sock, pkt);
             } else if(sock->state == LAST_ACK){
+                printf("服务器连接结束\n");
                 sock->state = CLOSED;
             } else{
                 handle_ack(sock, pkt);
@@ -300,7 +310,6 @@ void check_for_data(cmu_socket_t * sock, int flags){
     time_out.tv_usec = 0;
 
     while(pthread_mutex_lock(&(sock->window.recv_lock)) != 0);
-    
         switch(flags){
             case NO_FLAG: /* wait */
                 len = recvfrom(sock->socket, hdr, DEFAULT_HEADER_LEN, MSG_PEEK,
@@ -332,7 +341,6 @@ void check_for_data(cmu_socket_t * sock, int flags){
             handle_message(sock, pkt);
             free(pkt);
         }
-    
     pthread_mutex_unlock(&(sock->window.recv_lock));
 }
 
@@ -389,12 +397,14 @@ void check_timeout(cmu_socket_t * sock){
 
     if(sock->window.fin_time != 0 && sock->state == TIME_WAIT){
         long tim = get_current_time();
-        if(tim - sock->window.fin_time >= 2*sock->window.TimeoutInterval){
+        if(tim - sock->window.fin_time >= 2 * sock->window.TimeoutInterval){
             sock->state = CLOSED;
         }
     }
 
     if((nexts = sock->window.sent_head->next) != NULL){
+        if(sock->state == TIME_WAIT)
+            printf("nexts->is_resend = %d\n", nexts->is_resend);
         struct timeval now_time;
         gettimeofday(&now_time, NULL); /* 获取当前时间 */
         time = (now_time.tv_sec - nexts->sent_time.tv_sec) * 1000 + (now_time.tv_usec - nexts->sent_time.tv_usec) / 1000;
@@ -407,10 +417,10 @@ void check_timeout(cmu_socket_t * sock){
 
             //更新状态
             sock->window.ssthresh = sock->window.cwnd / 2;
+            printf("超时了\n");
             sock->window.cwnd = MAX_DLEN;
             sock->ack_dup = 0;
             sock->window.con_state = SLOW_STAR;
-
             sendto(sockfd, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);//重传
         }
     }
@@ -459,7 +469,7 @@ void* begin_backend(void * in){
         buf_len = dst->sending_len;
 
         if(death && buf_len == 0 && dst->window.sent_length == 0 && dst->state == CLOSED){ /* 如果确认结束并且没有数据要发，跳出循环 */
-            pthread_mutex_unlock(&(dst->send_lock));//之前没有解除send锁
+            pthread_mutex_unlock(&(dst->send_lock));
             break;
         }
 
@@ -468,17 +478,16 @@ void* begin_backend(void * in){
         }
 
         if(dst->window.sent_length == 0 && dst->state == CLOSE_WAIT){
-            /* TODO:超时重传 */
             send_FINACK(dst);
-
+            dst->state = LAST_ACK;
         }
 
         if(buf_len > 0){/* 有数据要发时才会，如果没数据就直接跳过，所以在外面套了一层判断 */
-            window_size = min(dst->window.cwnd, dst->window.rwnd);
-            length = min3(buf_len, MAX_DLEN, (int)(window_size - dst->window.sent_length));
+            window_size = min(dst->window.cwnd, (int)(dst->window.rwnd - dst->window.sent_length));
+            length = min3(buf_len, MAX_DLEN, window_size);
 
             length = (length > 0 ? length : 1);/* 如果length小于0，在这里把它重新赋值为1 */
-//            printf("buf_len: %d , window_size: %d; length: %d,  window_size - sent_length : %d\n",buf_len, window_size,length,  (int)(window_size - sent_length) );
+            printf("buf_len:%d, cwnd: %d ,rwnd: %d , window_size: %d; length: %d\n",buf_len, dst->window.cwnd,dst->window.rwnd, window_size, length );
             data = malloc(length);
             memcpy(data, dst->sending_buf, length);
 
@@ -503,9 +512,9 @@ void* begin_backend(void * in){
         /* TODO：如果此时数据还没有接受完全，那么读出的数据是不完整的 */
         /* 检查接收缓冲区有没有内容，如果有就读 */
         while(pthread_mutex_lock(&(dst->window.recv_lock)) != 0);
-        if(dst->window.recv_length > 0
+        if((dst->window.recv_length > 0
             && dst->window.recv_head->next != NULL
-            && dst->window.recv_head->next->adjacent)
+            && dst->window.recv_head->next->adjacent) || dst->state == CLOSED)
             send_signal = TRUE;
         else
             send_signal = FALSE;
@@ -518,3 +527,5 @@ void* begin_backend(void * in){
     pthread_exit(NULL);
     return NULL;
 }
+
+

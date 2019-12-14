@@ -23,8 +23,6 @@ void functionality(cmu_socket_t  * sock){
     fp = fopen("./test/file.c", "w+");
     int i = 0;
 
-    // sleep(5);
-    fp = fopen("./test/file.file", "w+");
     while(1){
         n = cmu_read(sock, buf, 9898, NO_FLAG);
         if(n == 0){

@@ -255,7 +255,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     dst->window.EstimatedRTT=WINDOW_INITIAL_RTT;
     dst->window.DevRTT=0;
 
-    dst->window.ssthresh=WINDOW_INITIAL_SSTHRESH;
+    dst->window.ssthresh=WINDOW_INITIAL_SSTHRESH * 1024;
     dst->window.con_state=SLOW_STAR;
     dst->window.TimeoutInterval=1000;
 
@@ -349,6 +349,7 @@ int cmu_close(cmu_socket_t * sock){
     pthread_mutex_unlock(&(sock->death_lock));
 
     pthread_join(sock->thread_id, NULL);
+    printf("state = %d\n", sock->state);
 
     if(sock != NULL){
         if(sock->window.recv_head != NULL)
@@ -394,7 +395,7 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
 
     switch(flags){
         case NO_FLAG:
-            while(sock->window.recv_length == 0 && sock->window.recv_head->next != NULL && sock->window.recv_head->next->adjacent){
+            while(sock->window.recv_length == 0 || sock->window.recv_head->next == NULL || !sock->window.recv_head->next->adjacent){
                 pthread_cond_wait(&(sock->wait_cond), &(sock->window.recv_lock));
                 if(sock->window.recv_length == 0 && sock->state == CLOSED){
                     pthread_mutex_unlock(&(sock->window.recv_lock));
@@ -418,9 +419,9 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
                     memcpy(new_buf, nexts->data_start + (length - read_len), nexts->data_length - (length - read_len));
                     free(nexts->data_start);
                     nexts->data_start = new_buf;
-                    nexts->seq += length - read_len;
-                    nexts->data_length -= length - read_len;
-                    sock->window.recv_length -= length - read_len + 1000;
+                    nexts->seq += (length - read_len);
+                    nexts->data_length -= (length - read_len);
+                    sock->window.recv_length -= (length - read_len);
                     read_len = length;
                 }
                 else{
