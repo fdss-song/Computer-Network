@@ -81,6 +81,7 @@ typedef struct {
 	uint32_t ssthresh; /* ssthresh */
 	control_status con_state;/* 用于拥塞控制算法表示状态 */
 	uint32_t TimeoutInterval;
+	long fin_time;
 }slide_window_t;
 
 typedef struct {
