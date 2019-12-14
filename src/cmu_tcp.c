@@ -44,13 +44,13 @@ void send_SYNACK(cmu_socket_t *dst){
   } else {
     ISN = dst->ISN;
   }
-  
+
   /* 写文档时请把这段删去，假装我们随机产生初始序列号 */
   ISN = 0;
   dst->ISN = 0;
   dst->window.last_ack_received = 1;
   /* *************以上删去************ */
-  
+
   pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port), ISN,
                   dst->window.last_seq_received, /* 对SYN的确认，ACK号为x+1 */
                   DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
@@ -142,7 +142,7 @@ void check_for_handshake(cmu_socket_t *sock, int flags){
 
         handle_handshake(sock, pkt);
         free(pkt);
-    } 
+    }
 }
 
 void handshake(cmu_socket_t *dst){
@@ -182,7 +182,7 @@ void send_FIN(cmu_socket_t *dst){
     while(pthread_mutex_lock(&(dst->window.ack_lock)) != 0);
     seq = dst->window.last_ack_received;
     pthread_mutex_unlock(&(dst->window.ack_lock));
-    
+
     pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
                 seq, dst->window.last_seq_received, /* 此处的ack序列号不重要 */
                 DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
@@ -288,7 +288,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
             }
 
             handshake(dst);
-            
+
             break;
         case(TCP_LISTENER):
             bzero((char *) &conn, sizeof(conn));
@@ -341,7 +341,7 @@ int cmu_close(cmu_socket_t * sock){
     printf("%d sent FIN\n", sock->type);
     print_state(sock);
 #endif
-    
+
     }
 
     while(pthread_mutex_lock(&(sock->death_lock)) != 0);
@@ -349,7 +349,7 @@ int cmu_close(cmu_socket_t * sock){
     pthread_mutex_unlock(&(sock->death_lock));
 
     pthread_join(sock->thread_id, NULL);
-    
+
     if(sock != NULL){
         if(sock->window.recv_head != NULL)
             free(sock->window.recv_head);
@@ -411,7 +411,7 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
                     pkts->next = nexts->next;
                     free(nexts->data_start);
                     free(nexts);
-                } 
+                }
                 else if(length - read_len < nexts->data_length){/* 剩余要读的内容小于等于recv_pkt的长度，并且该recv_pkt是能够直接读的，只在recv_pkt中取出部分 */
                     memcpy(dst + read_len, nexts->data_start, length - read_len);
                     new_buf = malloc(nexts->data_length - (length - read_len));//剩余的长度
@@ -422,7 +422,7 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
                     nexts->data_length -= length - read_len;
                     sock->window.recv_length -= length - read_len + 1000;
                     read_len = length;
-                } 
+                }
                 else{
                     //读到一个不能读的recv_pkt,什么也不做,跳出while循环
                     break;

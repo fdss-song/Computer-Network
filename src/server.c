@@ -12,12 +12,16 @@ void functionality(cmu_socket_t  * sock){
     FILE *fp;
     int n;
 
-    n = cmu_read(sock, buf, 200, NO_FLAG);
-    printf("R: %s\n", buf);
-    printf("N: %d\n", n);
-    cmu_write(sock, "hi there", 9);
-    cmu_read(sock, buf, 200, NO_FLAG);
-    cmu_write(sock, "hi there", 9);
+//    n = cmu_read(sock, buf, 200, NO_FLAG);
+//    printf("R: %s\n", buf);
+//    printf("N: %d\n", n);
+//    cmu_write(sock, "hi there", 9);
+//    cmu_read(sock, buf, 200, NO_FLAG);
+//    cmu_write(sock, "hi there", 9);
+
+//    sleep(5);
+    fp = fopen("./test/file.c", "w+");
+    int i = 0;
 
     // sleep(5);
     fp = fopen("./test/file.file", "w+");
@@ -26,9 +30,12 @@ void functionality(cmu_socket_t  * sock){
         if(n == 0){
             break;
         }
+        i += n;
+        printf("read_len : %d\n", i);
         fwrite(buf, 1, n, fp);
     }
 }
+
 
 /*
  * Param: argc - count of command line arguments provided
