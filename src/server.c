@@ -19,14 +19,16 @@ void functionality(cmu_socket_t  * sock){
     cmu_read(sock, buf, 200, NO_FLAG);
     cmu_write(sock, "hi there", 9);
 
-    sleep(5);
-    fp = fopen("./test/file.c", "w+");
-    while(TRUE){
-    	n = cmu_read(sock, buf, 9898, NO_FLAG);    
-    	fwrite(buf, 1, n, fp);
+    // sleep(5);
+    fp = fopen("./test/file.file", "w+");
+    while(1){
+        n = cmu_read(sock, buf, 9898, NO_FLAG);
+        if(n == 0){
+            break;
+        }
+        fwrite(buf, 1, n, fp);
     }
 }
-
 
 /*
  * Param: argc - count of command line arguments provided
