@@ -1,5 +1,11 @@
 #include "cmu_tcp.h"
 
+#ifdef DEBUG
+    void print_state(cmu_socket_t *sock){
+        printf("state = %d\n", sock->state);
+    }
+#endif
+
 /* 发送SYN */ /* TODO:可以优化，当前重发SYN会重新malloc */
 void send_SYN(cmu_socket_t *dst){
     srand((unsigned)time(NULL));
@@ -13,6 +19,11 @@ void send_SYN(cmu_socket_t *dst){
     }else{
         ISN = dst->ISN;
     }
+    /* TODO:写文档请把这段删去 */
+    ISN = 0;
+    dst->ISN = 0;
+    dst->window.last_ack_received = 1;
+    /* ******以上删去****** */
     pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port), ISN, 0, /* 初始ACK，任意值 */
                             DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN, SYN_FLAG_MASK, 1, 0, NULL, NULL, 0);
     sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
@@ -30,9 +41,16 @@ void send_SYNACK(cmu_socket_t *dst){
     ISN = rand() % SEQMAX; /* 随机数 */
     dst->ISN = ISN;
     dst->window.last_ack_received = ISN;
-  }else{
+  } else {
     ISN = dst->ISN;
   }
+  
+  /* 写文档时请把这段删去，假装我们随机产生初始序列号 */
+  ISN = 0;
+  dst->ISN = 0;
+  dst->window.last_ack_received = 1;
+  /* *************以上删去************ */
+  
   pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port), ISN,
                   dst->window.last_seq_received, /* 对SYN的确认，ACK号为x+1 */
                   DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
@@ -45,7 +63,6 @@ void send_SYNACK(cmu_socket_t *dst){
 
 void send_ACK(cmu_socket_t *dst){
   char *pkt;
-
   pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
                             dst->window.last_ack_received,
                             dst->window.last_seq_received,
@@ -54,7 +71,7 @@ void send_ACK(cmu_socket_t *dst){
   sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
             &(dst->conn), sizeof(dst->conn));
   free(pkt);
-    return;
+  return;
 }
 
 void handle_handshake(cmu_socket_t *sock, char *pkt){
@@ -159,42 +176,24 @@ void handshake(cmu_socket_t *dst){
 }
 
 void send_FIN(cmu_socket_t *dst){
-  char *pkt;
-  while(pthread_mutex_lock(&(dst->window.ack_lock)) != 0);
-  dst->FSN = dst->window.last_ack_received;
-  pthread_mutex_unlock(&(dst->window.ack_lock));
+    char *pkt;
+    uint32_t seq;
 
-  pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
-                dst->FSN, dst->window.last_seq_received+1,
+    while(pthread_mutex_lock(&(dst->window.ack_lock)) != 0);
+    seq = dst->window.last_ack_received;
+    pthread_mutex_unlock(&(dst->window.ack_lock));
+    
+    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
+                seq, dst->window.last_seq_received, /* 此处的ack序列号不重要 */
                 DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
-                ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
-  sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+                FIN_FLAG_MASK, dst->window.rwnd, 0, NULL, NULL, 0);
+
+    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
           &(dst->conn), sizeof(dst->conn));
-  free(pkt);
-  return;
+    dst->state = FIN_WAIT_1;
+    free(pkt);
+    return;
 }
-
-
-void teardown(cmu_socket_t *sock){
-    while(sock->state != CLOSED){
-        switch(sock->state){
-            case FIN_WAIT_1:
-                break;
-            case FIN_WAIT_2:
-                break;
-            case TIME_WAIT:
-                break;
-            case CLOSE_WAIT:
-                break;
-            case LAST_ACK:
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-
 
 /*
  * Param: dst - The structure where socket information will be stored
@@ -244,7 +243,7 @@ int cmu_socket(cmu_socket_t * dst, int flag, int port, char * serverIP){
     dst->type = flag;
     dst->dying = FALSE;
     pthread_mutex_init(&(dst->death_lock), NULL);
-    /* TODO:三次握手之后可以删掉 */
+
     dst->window.last_ack_received = 0;
     dst->window.last_seq_received = 0;
     pthread_mutex_init(&(dst->window.ack_lock), NULL);
@@ -334,6 +333,17 @@ int cmu_close(cmu_socket_t * sock){
     while(sock->window.sent_length != 0)
         sleep(2);
 
+    /* TODO:超时重传 */
+    if(sock->state == ESTABLISHED){
+        send_FIN(sock);
+
+#ifdef DEBUG
+    printf("%d sent FIN\n", sock->type);
+    print_state(sock);
+#endif
+    
+    }
+
     while(pthread_mutex_lock(&(sock->death_lock)) != 0);
     sock->dying = TRUE;
     pthread_mutex_unlock(&(sock->death_lock));
@@ -377,10 +387,19 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
 
     while(pthread_mutex_lock(&(sock->window.recv_lock)) != 0);
 
+    if(sock->window.recv_length == 0 && sock->state == CLOSED){
+        pthread_mutex_unlock(&(sock->window.recv_lock));
+        return 0;
+    }
+
     switch(flags){
         case NO_FLAG:
-            while(sock->window.recv_length == 0){
+            while(sock->window.recv_length == 0 && sock->window.recv_head->next != NULL && sock->window.recv_head->next->adjacent){
                 pthread_cond_wait(&(sock->wait_cond), &(sock->window.recv_lock));
+                if(sock->window.recv_length == 0 && sock->state == CLOSED){
+                    pthread_mutex_unlock(&(sock->window.recv_lock));
+                    return 0;
+                }
             }
         case NO_WAIT:
             pkts = sock->window.recv_head;
@@ -401,7 +420,7 @@ int cmu_read(cmu_socket_t * sock, char* dst, int length, int flags){
                     nexts->data_start = new_buf;
                     nexts->seq += length - read_len;
                     nexts->data_length -= length - read_len;
-                    sock->window.recv_length -= length - read_len;
+                    sock->window.recv_length -= length - read_len + 1000;
                     read_len = length;
                 } 
                 else{
