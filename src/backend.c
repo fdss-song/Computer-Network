@@ -2,13 +2,60 @@
 #include <math.h>
 
 #define min(A, B) ((A) > (B) ? (B) : (A))
-#define min3(A,B,C) (((A)> (B) ? (B) : (A)) > C) ? C : ((A) > (B) ? (B) : (A))
+#define min3(A,B,C) (((A)> (B) ? (B) : (A)) > (C)) ? (C) : ((A) > (B) ? (B) : (A))
 
 long get_current_time(){
     struct timeval time;
     gettimeofday(&time,NULL);
     return time.tv_sec*1000000+time.tv_usec;/* 返回微秒值 */
 }
+
+void handle_FIN(cmu_socket_t *dst, char *msg){
+    char *pkt;
+
+    dst->window.last_ack_received = get_ack(msg);
+    dst->window.last_seq_received = get_seq(msg) + 1;
+
+    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
+                            dst->window.last_ack_received,
+                            dst->window.last_seq_received,
+                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
+                            ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+            &(dst->conn), sizeof(dst->conn));
+    dst->state = CLOSE_WAIT;
+    free(pkt);
+}
+
+void handle_FIN1_ACK(cmu_socket_t *sock, char *pkt){
+    sock->state = FIN_WAIT_2;
+    /* TODO：此处ACK占用一个序列号吗？ */
+    sock->window.last_seq_received = get_seq(pkt);
+    sock->window.last_ack_received = get_ack(pkt);
+}
+
+void handle_FINACK(cmu_socket_t *dst, char *msg){
+    char *pkt;
+
+    dst->window.last_ack_received = get_ack(msg);
+    dst->window.last_seq_received = get_seq(msg) + 1;
+
+    pkt = create_packet_buf(dst->my_port, ntohs(dst->conn.sin_port),
+                            dst->window.last_ack_received,
+                            dst->window.last_seq_received,
+                            DEFAULT_HEADER_LEN, DEFAULT_HEADER_LEN,
+                            ACK_FLAG_MASK, 1, 0, NULL, NULL, 0);
+    sendto(dst->socket, pkt, DEFAULT_HEADER_LEN, 0, (struct sockaddr*)
+            &(dst->conn), sizeof(dst->conn));
+    dst->state = TIME_WAIT;
+    dst->window.fin_time = get_current_time();
+    free(pkt);
+    return;
+}
+
+
+
+
 
 void handle_ack(cmu_socket_t * sock, char * pkt){
     uint32_t sample_RTT;
@@ -240,7 +287,6 @@ int check_ack(cmu_socket_t * sock, uint32_t seq){
  *
  */
 void check_for_data(cmu_socket_t * sock, int flags){
-
     char hdr[DEFAULT_HEADER_LEN];
     char* pkt;
     socklen_t conn_len = sizeof(sock->conn);
@@ -316,7 +362,6 @@ void single_send(cmu_socket_t * sock, char* data, int length){
     sendto(sockfd, msg, plen, 0, (struct sockaddr*) &(sock->conn), conn_len);
 
     sent_pkt *pkt_store;
-    /* TODO：此处和handle_ack中释放会产生竞争，若改为多线程，此处需要加锁 */
     sock->window.sent_length += length; /* 储存在链表中的数据需要计算在sending_len中 */
     pkt_store = malloc(sizeof(sent_pkt)); /* 用于储存sent_pkt的结构 */
 
@@ -426,15 +471,11 @@ void* begin_backend(void * in){
             /* TODO:超时重传 */
             send_FINACK(dst);
 
-#ifdef DEBUG
-    printf("%d sent FINACK\n", dst->type);
-#endif
-
         }
 
         if(buf_len > 0){/* 有数据要发时才会，如果没数据就直接跳过，所以在外面套了一层判断 */
             window_size = min(dst->window.cwnd, dst->window.rwnd);
-            length = min3(buf_len, MAX_DLEN, (int)(window_size - sent_length));
+            length = min3(buf_len, MAX_DLEN, (int)(window_size - dst->window.sent_length));
 
             length = (length > 0 ? length : 1);/* 如果length小于0，在这里把它重新赋值为1 */
 //            printf("buf_len: %d , window_size: %d; length: %d,  window_size - sent_length : %d\n",buf_len, window_size,length,  (int)(window_size - sent_length) );
