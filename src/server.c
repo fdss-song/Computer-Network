@@ -20,7 +20,7 @@ void functionality(cmu_socket_t  * sock){
 //    cmu_write(sock, "hi there", 9);
 
 //    sleep(5);
-    fp = fopen("./test/file.c", "w+");
+    fp = fopen("./test/file.pdf", "w+");
     int i = 0;
 
     while(1){

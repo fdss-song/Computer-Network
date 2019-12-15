@@ -3,6 +3,7 @@
 
 #define min(A, B) ((A) > (B) ? (B) : (A))
 #define min3(A,B,C) (((A)> (B) ? (B) : (A)) > (C)) ? (C) : ((A) > (B) ? (B) : (A))
+#define max(A, B) ((A) < (B) ? (B) : (A))
 
 long get_current_time(){
     struct timeval time;
@@ -53,10 +54,6 @@ void handle_FINACK(cmu_socket_t *dst, char *msg){
     return;
 }
 
-
-
-
-
 void handle_ack(cmu_socket_t * sock, char * pkt){
     uint32_t sample_RTT;
     socklen_t conn_len = sizeof(sock -> conn);
@@ -75,7 +72,8 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                 sock->window.cwnd += MAX_DLEN * MAX_DLEN / sock->window.cwnd;
                 break;
             case FAST_RECO: /* 快速恢复 */
-                sock->window.cwnd = sock->window.ssthresh;
+                // sock->window.cwnd = sock->window.ssthresh;
+                sock->window.cwnd = max(sock->window.ssthresh, MAX_DLEN);
                 sock->window.con_state = CONG_AVOI;
                 break;
             default:
@@ -111,8 +109,8 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
 
         if(sock->window.con_state == FAST_RECO){
             sock->window.cwnd += MAX_DLEN;/* 如果已经处于快速恢复状态，则加上一个mss */
-        }
-        if(sock->ack_dup == 3){
+        }else{
+            if(sock->ack_dup == 3){
             printf("快速重传了！！！\n");
             /* 立即快速重传，并进入快速恢复状态 */
             if(sock->window.con_state != FAST_RECO){
@@ -128,6 +126,7 @@ void handle_ack(cmu_socket_t * sock, char * pkt){
                 sendto(sock->socket, nexts->pkt_start, get_plen(nexts->pkt_start), 0, (struct sockaddr*) &(sock->conn), conn_len);/* 快速重传一定是传缓存链表的第一个包，此处主要看看语法对不对 */
                 sock->ack_dup = 0;
             }
+        }
         }
     }
 
@@ -454,6 +453,8 @@ void* begin_backend(void * in){
     char *data, *temp;
     int buf_len, length;
 
+    bool one_byte_flag = 0;
+
     struct timeval now_time;
 
     while(TRUE){
@@ -481,13 +482,25 @@ void* begin_backend(void * in){
             send_FINACK(dst);
             dst->state = LAST_ACK;
         }
-
+        
         if(buf_len > 0){/* 有数据要发时才会，如果没数据就直接跳过，所以在外面套了一层判断 */
-            window_size = min(dst->window.cwnd, (int)(dst->window.rwnd - dst->window.sent_length));
-            length = min3(buf_len, MAX_DLEN, window_size);
+            uint32_t temp0 = (dst->window.rwnd > dst->window.sent_length) ? 
+                    dst->window.rwnd - dst->window.sent_length : 0;
+                // printf("judge\n");
+            if ((temp0 == 0 && !one_byte_flag) || temp0 > 0) {
+                if (temp0 == 0) {
+                    one_byte_flag = 1;
+                    length = 1;
+                } else {
+                    one_byte_flag = 0;
+                    window_size = min(dst->window.cwnd, temp0);
+                    length = min3(buf_len, MAX_DLEN, window_size);
+                }
+              
+            // length = (length > 0 ? length : 1);/* 如果length小于0，在这里把它重新赋值为1 */
 
-            length = (length > 0 ? length : 1);/* 如果length小于0，在这里把它重新赋值为1 */
-            printf("buf_len:%d, cwnd: %d ,rwnd: %d , window_size: %d; length: %d\n",buf_len, dst->window.cwnd,dst->window.rwnd, window_size, length );
+            printf("buf_len:%d, ssthresh: %d, cwnd: %d ,rwnd: %d , window_size: %d; length: %d\n",
+                    buf_len, dst->window.ssthresh, dst->window.cwnd,dst->window.rwnd, window_size, length);
             data = malloc(length);
             memcpy(data, dst->sending_buf, length);
 
@@ -501,6 +514,9 @@ void* begin_backend(void * in){
             pthread_mutex_unlock(&(dst->send_lock));
             single_send(dst, data, length);
             free(data);
+            }else{
+            pthread_mutex_unlock(&(dst->send_lock));
+            }
         } else { /* 重要：加锁和解锁对应 */
             pthread_mutex_unlock(&(dst->send_lock));
         }
